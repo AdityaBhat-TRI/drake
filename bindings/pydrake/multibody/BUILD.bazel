@@ -1,9 +1,9 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 load("//tools/install:install.bzl", "install", "install_files")
+load("//tools/jupyter:jupyter_py.bzl", "drake_jupyter_py_binary")
 load(
-    "//tools/skylark:pybind.bzl",
-    "drake_pybind_library",
-    "get_drake_py_installs",
-    "get_pybind_package_info",
+    "//tools/skylark:alias.bzl",
+    "drake_py_library_aliases",
 )
 load(
     "//tools/skylark:drake_py.bzl",
@@ -12,15 +12,10 @@ load(
     "drake_py_unittest",
 )
 load(
-    "//tools/skylark:alias.bzl",
-    "drake_py_library_aliases",
-)
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
-load("//tools/jupyter:jupyter_py.bzl", "drake_jupyter_py_binary")
-load("@python//:version.bzl", "PYTHON_SITE_PACKAGES_RELPATH")
-load(
-    "//tools/workspace:cmake_configure_file.bzl",
-    "cmake_configure_file",
+    "//tools/skylark:pybind.bzl",
+    "drake_pybind_library",
+    "get_drake_py_installs",
+    "get_pybind_package_info",
 )
 
 package(default_visibility = [
@@ -100,14 +95,17 @@ drake_pybind_library(
         "//bindings/pydrake/common:cpp_template_pybind",
         "//bindings/pydrake/common:default_scalars_pybind",
         "//bindings/pydrake/common:deprecation_pybind",
-        "//bindings/pydrake/common:eigen_geometry_pybind",
         "//bindings/pydrake/common:eigen_pybind",
         "//bindings/pydrake/common:identifier_pybind",
         "//bindings/pydrake/common:serialize_pybind",
         "//bindings/pydrake/common:type_pack",
         "//bindings/pydrake/common:type_safe_index_pybind",
     ],
-    cc_srcs = ["tree_py.cc"],
+    cc_srcs = [
+        "tree_py.cc",
+        "tree_py.h",
+        "tree_py_inertia.cc",
+    ],
     package_info = PACKAGE_INFO,
     py_deps = [
         ":math_py",
@@ -126,7 +124,6 @@ drake_pybind_library(
         "//bindings/pydrake/common:cpp_template_pybind",
         "//bindings/pydrake/common:default_scalars_pybind",
         "//bindings/pydrake/common:deprecation_pybind",
-        "//bindings/pydrake/common:eigen_geometry_pybind",
         "//bindings/pydrake/common:eigen_pybind",
         "//bindings/pydrake/common:identifier_pybind",
         "//bindings/pydrake/common:serialize_pybind",
@@ -137,6 +134,7 @@ drake_pybind_library(
     cc_srcs = ["plant_py.cc"],
     package_info = PACKAGE_INFO,
     py_deps = [
+        ":fem_py",
         ":math_py",
         ":module_py",
         ":tree_py",
@@ -153,11 +151,13 @@ drake_pybind_library(
         "//bindings/pydrake:documentation_pybind",
         "//bindings/pydrake/common:deprecation_pybind",
         "//bindings/pydrake/common:serialize_pybind",
+        "//bindings/pydrake/common:sorted_pair_pybind",
     ],
     cc_srcs = ["parsing_py.cc"],
     package_info = PACKAGE_INFO,
     py_deps = [
         ":module_py",
+        ":tree_py",
     ],
 )
 
@@ -195,6 +195,7 @@ drake_pybind_library(
     py_deps = [
         ":module_py",
         ":plant_py",
+        "//bindings/pydrake/planning",
         "//bindings/pydrake/solvers",
     ],
 )
@@ -214,6 +215,7 @@ drake_pybind_library(
         ":module_py",
         ":plant_py",
         "//bindings/pydrake/solvers",
+        "//bindings/pydrake:trajectories_py",
     ],
 )
 
@@ -291,24 +293,6 @@ drake_jupyter_py_binary(
     ],
 )
 
-cmake_configure_file(
-    name = "generate_run_installed_mesh_to_model",
-    src = "run_installed_mesh_to_model.py.in",
-    out = "run_installed_mesh_to_model.py",
-    defines = [
-        "PYTHON_SITE_PACKAGES_RELPATH=" + PYTHON_SITE_PACKAGES_RELPATH,
-    ],
-)
-
-cmake_configure_file(
-    name = "generate_run_installed_fix_inertia",
-    src = "run_installed_fix_inertia.py.in",
-    out = "run_installed_fix_inertia.py",
-    defines = [
-        "PYTHON_SITE_PACKAGES_RELPATH=" + PYTHON_SITE_PACKAGES_RELPATH,
-    ],
-)
-
 install_files(
     name = "install_wrapper_scripts",
     dest = "bin",
@@ -377,7 +361,7 @@ drake_jupyter_py_binary(
     name = "examples/jupyter_widgets_examples",
     add_test_rule = 1,
     data = [
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":jupyter_widgets_py",
@@ -393,10 +377,10 @@ drake_jupyter_py_binary(
 drake_py_unittest(
     name = "parsing_test",
     data = [
-        "//examples/atlas:models",
         "//multibody/benchmarks/acrobot:models",
         "//multibody/parsing:process_model_directives_test_models",
         "//multibody/parsing:test_models",
+        "@drake_models//:atlas",
     ],
     deps = [
         ":parsing_py",
@@ -425,11 +409,11 @@ drake_py_unittest(
     data = [
         ":models",
         "//examples/acrobot:models",
-        "//manipulation/models/iiwa_description:models",
-        "//manipulation/models/wsg_50_description:models",
         "//multibody:models",
         "//multibody/benchmarks/acrobot:models",
         "//multibody/benchmarks/free_body:models",
+        "@drake_models//:iiwa_description",
+        "@drake_models//:wsg_50_description",
     ],
     deps = [
         ":benchmarks_py",
@@ -559,7 +543,7 @@ drake_py_unittest(
 
 add_lint_tests_pydrake(
     python_lint_extra_srcs = [
-        "run_installed_mesh_to_model.py.in",
-        "run_installed_fix_inertia.py.in",
+        "run_installed_mesh_to_model.py",
+        "run_installed_fix_inertia.py",
     ],
 )

@@ -1,5 +1,10 @@
-load("//tools/skylark:drake_py.bzl", "drake_py_unittest")
 load("//tools/lint:lint.bzl", "add_lint_tests")
+load("//tools/skylark:drake_py.bzl", "drake_py_unittest")
+
+config_setting(
+    name = "enabled",
+    flag_values = {"//tools/flags:with_nlopt": "True"},
+)
 
 exports_files(
     ["patches/gen_enums.patch"],
@@ -36,7 +41,7 @@ drake_py_unittest(
         "@nlopt_internal//:genrule/nlopt.hpp",
     ],
     deps = [
-        "@bazel_tools//tools/python/runfiles",
+        "@rules_python//python/runfiles",
     ],
 )
 

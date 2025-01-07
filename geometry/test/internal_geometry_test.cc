@@ -53,6 +53,8 @@ GTEST_TEST(InternalGeometryTest, PropertyAssignment) {
         geometry.proximity_properties()->HasProperty("group1", "value"));
     EXPECT_TRUE(
         geometry.proximity_properties()->HasProperty("group2", "value"));
+    EXPECT_EQ(geometry.proximity_properties(),
+              geometry.properties(Role::kProximity));
   }
 
   {
@@ -71,6 +73,8 @@ GTEST_TEST(InternalGeometryTest, PropertyAssignment) {
         geometry.illustration_properties()->HasProperty("group1", "value"));
     EXPECT_TRUE(
         geometry.illustration_properties()->HasProperty("group2", "value"));
+    EXPECT_EQ(geometry.illustration_properties(),
+              geometry.properties(Role::kIllustration));
   }
 
   {
@@ -83,6 +87,8 @@ GTEST_TEST(InternalGeometryTest, PropertyAssignment) {
         geometry.SetRole(PerceptionProperties()),
         "Geometry already has perception role assigned");
     EXPECT_TRUE(geometry.has_perception_role());
+    EXPECT_EQ(geometry.perception_properties(),
+              geometry.properties(Role::kPerception));
   }
 }
 
@@ -231,25 +237,6 @@ GTEST_TEST(InternalGeometryTest, Rename) {
     geometry.set_name(new_name);
   }
   EXPECT_EQ(geometry.name(), "new_name");
-}
-
-// Simple test for convex hull API: set, get, and clear.
-GTEST_TEST(InternalGeometryTest, ConvexHull) {
-  InternalGeometry geometry;
-
-  EXPECT_EQ(geometry.convex_hull(), nullptr);
-
-  geometry.set_convex_hull(std::make_unique<PolygonSurfaceMesh<double>>(
-      std::vector<int>{3, 0, 1, 2},
-      std::vector<Vector3d>{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}));
-
-  ASSERT_NE(geometry.convex_hull(), nullptr);
-
-  EXPECT_EQ(geometry.convex_hull()->num_vertices(), 3);
-  EXPECT_EQ(geometry.convex_hull()->num_faces(), 1);
-
-  geometry.set_convex_hull(nullptr);
-  EXPECT_EQ(geometry.convex_hull(), nullptr);
 }
 
 }  // namespace

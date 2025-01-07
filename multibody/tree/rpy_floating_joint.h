@@ -40,7 +40,7 @@ singularity-free QuaternionFloatingJoint instead.
 template <typename T>
 class RpyFloatingJoint final : public Joint<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RpyFloatingJoint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RpyFloatingJoint);
 
   template <typename Scalar>
   using Context = systems::Context<Scalar>;
@@ -93,6 +93,8 @@ class RpyFloatingJoint final : public Joint<T> {
     // for this joint.
   }
 
+  ~RpyFloatingJoint() final;
+
   /** Returns the name of this joint type: "rpy_floating" */
   const std::string& type_name() const final;
 
@@ -106,25 +108,11 @@ class RpyFloatingJoint final : public Joint<T> {
     return this->default_damping_vector()[0];
   }
 
-  DRAKE_DEPRECATED("2024-06-01", "Use default_angular_damping() instead.")
-  double angular_damping() const {
-    // N.B. All 3 angular damping coefficients are set to the same value for
-    // this joint.
-    return this->default_damping_vector()[0];
-  }
-
   /** Returns this joint's default translational damping constant in N⋅s/m. The
   damping force (in N) is modeled as `f = -damping⋅v` i.e. opposing motion,
   with v the translational velocity of frame M in F (see
   get_translational_velocity()) and f the force on child body B at Mo. */
   double default_translational_damping() const {
-    // N.B. All 3 translational damping coefficients are set to the same value
-    // for this joint.
-    return this->default_damping_vector()[3];
-  }
-
-  DRAKE_DEPRECATED("2024-06-01", "Use default_translational_damping() instead.")
-  double translational_damping() const {
     // N.B. All 3 translational damping coefficients are set to the same value
     // for this joint.
     return this->default_damping_vector()[3];
@@ -166,7 +154,7 @@ class RpyFloatingJoint final : public Joint<T> {
 
   /** Sets the `context` so that the generalized coordinates corresponding to
   the roll-pitch-yaw rotation angles of this joint equals `angles`.
-  @param[in] context
+  @param[in,out] context
     A Context for the MultibodyPlant this joint belongs to.
   @param[in] angles
     Angles in radians to be stored in `context` ordered as θr, θp, θy.
@@ -175,13 +163,13 @@ class RpyFloatingJoint final : public Joint<T> {
   @see get_angles() for details */
   const RpyFloatingJoint<T>& set_angles(Context<T>* context,
                                         const Vector3<T>& angles) const {
-    get_mobilizer().set_angles(context, angles);
+    get_mobilizer().SetAngles(context, angles);
     return *this;
   }
 
   /** Sets the roll-pitch-yaw angles in `context` so this Joint's orientation
   is consistent with the given `R_FM` rotation matrix.
-  @param[in] context
+  @param[in,out] context
     A Context for the MultibodyPlant this joint belongs to.
   @param[in] R_FM
     The rotation matrix giving the orientation of frame M in frame F.
@@ -189,8 +177,7 @@ class RpyFloatingJoint final : public Joint<T> {
   @returns a constant reference to this joint. */
   const RpyFloatingJoint<T>& SetOrientation(
       systems::Context<T>* context, const math::RotationMatrix<T>& R_FM) const {
-    set_angles(context, math::RollPitchYaw(R_FM).vector());
-    return *this;
+    return set_angles(context, math::RollPitchYaw(R_FM).vector());
   }
 
   /** Returns the translation (position vector) `p_FM` of the child frame M's
@@ -205,15 +192,15 @@ class RpyFloatingJoint final : public Joint<T> {
 
   /** Sets `context` to store the translation (position vector) `p_FM` of frame
   M's origin Mo measured and expressed in frame F.
-  @param[out] context
+  @param[in,out] context
     A Context for the MultibodyPlant this joint belongs to.
   @param[in] p_FM
     The desired position of frame M's origin in frame F, to be stored in
     `context`.
   @returns a constant reference to this joint. */
-  const RpyFloatingJoint<T>& set_translation(systems::Context<T>* context,
-                                             const Vector3<T>& p_FM) const {
-    get_mobilizer().set_translation(context, p_FM);
+  const RpyFloatingJoint<T>& SetTranslation(systems::Context<T>* context,
+                                            const Vector3<T>& p_FM) const {
+    get_mobilizer().SetTranslation(context, p_FM);
     return *this;
   }
 
@@ -230,23 +217,22 @@ class RpyFloatingJoint final : public Joint<T> {
 
   /** Sets `context` to store `X_FM` the pose of frame M measured and expressed
   in frame F.
-  @param[out] context
+  @param[in,out] context
     A Context for the MultibodyPlant this joint belongs to.
   @param[in] X_FM
-    The desired pose of frame M in F to be stored in `context`.
+    The desired pose of frame M in frame F to be stored in `context`.
   @warning See class documentation for discussion of singular configurations.
   @returns a constant reference to `this` joint. */
   const RpyFloatingJoint<T>& SetPose(
       systems::Context<T>* context, const math::RigidTransform<T>& X_FM) const {
     const math::RotationMatrix<T>& R_FM = X_FM.rotation();
-    get_mobilizer().set_angles(context, math::RollPitchYaw<T>(R_FM).vector());
-    get_mobilizer().set_translation(context, X_FM.translation());
+    get_mobilizer().SetAngles(context, math::RollPitchYaw<T>(R_FM).vector());
+    get_mobilizer().SetTranslation(context, X_FM.translation());
     return *this;
   }
 
   /** Retrieves from `context` the angular velocity `w_FM` of the child frame
   M in the parent frame F, expressed in F.
-
   @param[in] context
     A Context for the MultibodyPlant this joint belongs to.
   @retval w_FM
@@ -259,7 +245,7 @@ class RpyFloatingJoint final : public Joint<T> {
 
   /** Sets in `context` the state for this joint so that the angular velocity
   of the child frame M in the parent frame F is `w_FM`.
-  @param[out] context
+  @param[in,out] context
     A Context for the MultibodyPlant this joint belongs to.
   @param[in] w_FM
     A vector in ℝ³ with the angular velocity of the child frame M in the
@@ -268,7 +254,7 @@ class RpyFloatingJoint final : public Joint<T> {
   @returns a constant reference to this joint. */
   const RpyFloatingJoint<T>& set_angular_velocity(
       systems::Context<T>* context, const Vector3<T>& w_FM) const {
-    get_mobilizer().set_angular_velocity(context, w_FM);
+    get_mobilizer().SetAngularVelocity(context, w_FM);
     return *this;
   }
 
@@ -287,7 +273,7 @@ class RpyFloatingJoint final : public Joint<T> {
 
   /** Sets in `context` the state for this joint so that the translational
   velocity of the child frame M's origin in the parent frame F is `v_FM`.
-  @param[out] context
+  @param[in,out] context
     A Context for the MultibodyPlant this joint belongs to.
   @param[in] v_FM
     A vector in ℝ³ with the translational velocity of the child frame M's
@@ -296,7 +282,7 @@ class RpyFloatingJoint final : public Joint<T> {
   @returns a constant reference to this joint. */
   const RpyFloatingJoint<T>& set_translational_velocity(
       systems::Context<T>* context, const Vector3<T>& v_FM) const {
-    get_mobilizer().set_translational_velocity(context, v_FM);
+    get_mobilizer().SetTranslationalVelocity(context, v_FM);
     return *this;
   }
   /**@}*/
@@ -441,8 +427,8 @@ class RpyFloatingJoint final : public Joint<T> {
   }
 
   // Joint<T> overrides:
-  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint()
-      const final;
+  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint(
+      const internal::SpanningForest::Mobod& mobod) const final;
 
   std::unique_ptr<Joint<double>> DoCloneToScalar(
       const internal::MultibodyTree<double>& tree_clone) const final;
@@ -461,20 +447,13 @@ class RpyFloatingJoint final : public Joint<T> {
 
   // Returns the mobilizer implementing this joint.
   const internal::RpyFloatingMobilizer<T>& get_mobilizer() const {
-    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
-    const auto* mobilizer =
-        dynamic_cast<const internal::RpyFloatingMobilizer<T>*>(
-            this->get_implementation().mobilizer);
-    DRAKE_DEMAND(mobilizer != nullptr);
-    return *mobilizer;
+    return this
+        ->template get_mobilizer_downcast<internal::RpyFloatingMobilizer>();
   }
 
   internal::RpyFloatingMobilizer<T>& get_mutable_mobilizer() {
-    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
-    auto* mobilizer = dynamic_cast<internal::RpyFloatingMobilizer<T>*>(
-        this->get_implementation().mobilizer);
-    DRAKE_DEMAND(mobilizer != nullptr);
-    return *mobilizer;
+    return this->template get_mutable_mobilizer_downcast<
+        internal::RpyFloatingMobilizer>();
   }
 
   // Helper method to make a clone templated on ToScalar.
@@ -490,4 +469,4 @@ const char RpyFloatingJoint<T>::kTypeName[] = "rpy_floating";
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::RpyFloatingJoint)
+    class ::drake::multibody::RpyFloatingJoint);

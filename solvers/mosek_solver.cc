@@ -83,10 +83,10 @@ bool MosekSolver::is_available() {
   return true;
 }
 
-void MosekSolver::DoSolve(const MathematicalProgram& prog,
-                          const Eigen::VectorXd& initial_guess,
-                          const SolverOptions& merged_options,
-                          MathematicalProgramResult* result) const {
+void MosekSolver::DoSolve2(const MathematicalProgram& prog,
+                           const Eigen::VectorXd& initial_guess,
+                           internal::SpecificOptions* options,
+                           MathematicalProgramResult* result) const {
   if (!prog.GetVariableScaling().empty()) {
     static const logging::Warn log_once(
         "MosekSolver doesn't support the feature of variable scaling.");
@@ -109,12 +109,10 @@ void MosekSolver::DoSolve(const MathematicalProgram& prog,
       impl.decision_variable_to_mosek_nonmatrix_variable().size();
 
   // Set the options (parameters).
-  bool print_to_console{false};
-  std::string print_file_name{};
+  bool is_printing{};
   std::optional<std::string> msk_writedata;
   if (rescode == MSK_RES_OK) {
-    rescode = impl.UpdateOptions(merged_options, id(), &print_to_console,
-                                 &print_file_name, &msk_writedata);
+    impl.UpdateOptions(options, &is_printing, &msk_writedata);
   }
 
   // Always check if rescode is MSK_RES_OK before we call any Mosek functions.
@@ -153,9 +151,18 @@ void MosekSolver::DoSolve(const MathematicalProgram& prog,
                      std::pair<internal::ConstraintDualIndices,
                                internal::ConstraintDualIndices>>
       bb_con_dual_indices;
+  // When a PositiveSemidefiniteConstraint is imposed on a scalar, it is
+  // equivalent to constraining that scalar variable with a bounding box
+  // constraint. We store the dual variable indices for that
+  // PositiveSemidefiniteConstraint in scalar_psd_con_dual_indices.
+  std::unordered_map<
+      Binding<PositiveSemidefiniteConstraint>,
+      std::pair<internal::ConstraintDualIndex, internal::ConstraintDualIndex>>
+      scalar_psd_con_dual_indices;
   // Add bounding box constraints on decision variables.
   if (rescode == MSK_RES_OK) {
-    rescode = impl.AddBoundingBoxConstraints(prog, &bb_con_dual_indices);
+    rescode = impl.AddVariableBounds(prog, &bb_con_dual_indices,
+                                     &scalar_psd_con_dual_indices);
   }
   // Specify binary variables.
   bool with_integer_or_binary_variable = false;
@@ -198,9 +205,19 @@ void MosekSolver::DoSolve(const MathematicalProgram& prog,
         impl.AddQuadraticConstraints(prog, &quadratic_constraint_dual_indices);
   }
 
-  // Add linear matrix inequality constraints.
+  // Add 2x2 PSD constraints as rotated lorentz cones.
+  std::unordered_map<Binding<PositiveSemidefiniteConstraint>, MSKint64t>
+      twobytwo_psd_constraint_cone_acc_indices;
   if (rescode == MSK_RES_OK) {
-    rescode = impl.AddLinearMatrixInequalityConstraint(prog);
+    rescode = impl.Add2x2PositiveSemidefiniteConstraints(
+        prog, &twobytwo_psd_constraint_cone_acc_indices);
+  }
+
+  // Add linear matrix inequality constraints.
+  std::unordered_map<Binding<LinearMatrixInequalityConstraint>, MSKint64t>
+      lmi_acc_indices;
+  if (rescode == MSK_RES_OK) {
+    rescode = impl.AddLinearMatrixInequalityConstraint(prog, &lmi_acc_indices);
   }
 
   // Add exponential cone constraints.
@@ -215,7 +232,7 @@ void MosekSolver::DoSolve(const MathematicalProgram& prog,
   MSKsoltypee solution_type;
   if (with_integer_or_binary_variable) {
     solution_type = MSK_SOL_ITG;
-  } else if (prog.quadratic_costs().empty() &&
+  } else if (prog.quadratic_costs().empty() && prog.l2norm_costs().empty() &&
              prog.quadratic_constraints().empty() &&
              prog.lorentz_cone_constraints().empty() &&
              prog.rotated_lorentz_cone_constraints().empty() &&
@@ -269,7 +286,7 @@ void MosekSolver::DoSolve(const MathematicalProgram& prog,
     // Refer to
     // https://docs.mosek.com/latest/capi/debugging-tutorials.html#debugging-tutorials
     // on printing the solution summary.
-    if (print_to_console || !print_file_name.empty()) {
+    if (is_printing) {
       if (rescode == MSK_RES_OK) {
         rescode = MSK_solutionsummary(impl.task(), MSK_STREAM_LOG);
       }
@@ -347,7 +364,9 @@ void MosekSolver::DoSolve(const MathematicalProgram& prog,
         solution_type, prog, bb_con_dual_indices, linear_con_dual_indices,
         lin_eq_con_dual_indices, quadratic_constraint_dual_indices,
         lorentz_cone_acc_indices, rotated_lorentz_cone_acc_indices,
-        exp_cone_acc_indices, psd_barvar_indices, result);
+        lmi_acc_indices, exp_cone_acc_indices, psd_barvar_indices,
+        scalar_psd_con_dual_indices, twobytwo_psd_constraint_cone_acc_indices,
+        result);
     DRAKE_ASSERT(rescode == MSK_RES_OK);
   }
 

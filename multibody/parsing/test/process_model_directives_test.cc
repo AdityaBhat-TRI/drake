@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/find_resource.h"
+#include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_no_throw.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/common/yaml/yaml_io.h"
@@ -310,8 +311,9 @@ GTEST_TEST(ProcessModelDirectivesTest, CollisionFilterGroupSmokeTest) {
   // pieces.
   DiagramBuilder<double> builder;
   auto [plant, scene_graph] = AddMultibodyPlantSceneGraph(&builder, 0.);
+  auto parser = make_parser(&plant);
   ProcessModelDirectives(directives, &plant,
-                         nullptr, make_parser(&plant).get());
+                         nullptr, parser.get());
 
   // Make sure the plant is not finalized such that the Finalize() default
   // filtering has not taken into effect yet. This guarantees that the
@@ -337,6 +339,29 @@ GTEST_TEST(ProcessModelDirectivesTest, CollisionFilterGroupSmokeTest) {
     {"model6::collision", "model7::collision"},
   };
   VerifyCollisionFilters(scene_graph, expected_filters);
+
+  // Verify parser-level collision filter reporting.
+  CollisionFilterGroups expected_report;
+  expected_report.AddGroup("across_models", {"model1::base", "model2::base"});
+  expected_report.AddGroup("group_45", {"model4::base", "model5::base"});
+  expected_report.AddGroup("group_4567",
+                           {"model4::base", "model5::base",
+                            "model6::base", "model7::base"});
+  expected_report.AddGroup("group_67", {"model6::base", "model7::base"});
+  expected_report.AddGroup("nested::across_sub_models",
+                           {"nested::sub_model1::base",
+                            "nested::sub_model2::base"});
+  expected_report.AddGroup("nested_group", {"model3::base"});
+  expected_report.AddGroup("nested_members",
+                           {"model1::base", "nested::sub_model2::base"});
+  expected_report.AddExclusionPair({"across_models", "across_models"});
+  expected_report.AddExclusionPair({"group_4567", "group_4567"});
+  expected_report.AddExclusionPair(
+      {"nested::across_sub_models", "nested::across_sub_models"});
+  expected_report.AddExclusionPair(
+      {"nested::across_sub_models", "nested_group"});
+  expected_report.AddExclusionPair({"nested_members", "nested_members"});
+  EXPECT_EQ(parser->GetCollisionFilterGroups(), expected_report);
 }
 
 // Test collision filter groups in ModelDirectives.
@@ -397,12 +422,23 @@ GTEST_TEST(ProcessModelDirectivesTest, DefaultPositions) {
                          make_parser(&plant).get());
   plant.Finalize();
 
+  const ModelInstanceIndex simple =
+      plant.GetModelInstanceByName("simple_model");
+  const ModelInstanceIndex simple_again =
+      plant.GetModelInstanceByName("simple_model_again");
+
   auto context = plant.CreateDefaultContext();
   const math::RigidTransformd X_WB(
       math::RollPitchYawd(5 * M_PI / 180, 6 * M_PI / 180, 7 * M_PI / 180),
       Eigen::Vector3d(1, 2, 3));
-  EXPECT_TRUE(plant.GetFreeBodyPose(*context, plant.GetBodyByName("base"))
-                  .IsNearlyEqualTo(X_WB, 1e-14));
+  EXPECT_TRUE(CompareMatrices(
+      plant.GetFreeBodyPose(*context, plant.GetBodyByName("base", simple))
+          .GetAsMatrix34(),
+      X_WB.GetAsMatrix34(), 1e-14));
+  EXPECT_TRUE(CompareMatrices(
+      plant.GetFreeBodyPose(*context, plant.GetBodyByName("base", simple_again))
+          .GetAsMatrix34(),
+      X_WB.GetAsMatrix34(), 1e-14));
   EXPECT_EQ(
       plant.GetJointByName<RevoluteJoint>("ShoulderJoint").get_angle(*context),
       0.1);

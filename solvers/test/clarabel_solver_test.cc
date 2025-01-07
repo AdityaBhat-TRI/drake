@@ -1,11 +1,16 @@
 #include "drake/solvers/clarabel_solver.h"
 
+#include <fstream>
+
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "drake/common/temp_directory.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/solvers/mathematical_program.h"
 #include "drake/solvers/test/exponential_cone_program_examples.h"
+#include "drake/solvers/test/l2norm_cost_examples.h"
 #include "drake/solvers/test/linear_program_examples.h"
 #include "drake/solvers/test/mathematical_program_test_util.h"
 #include "drake/solvers/test/quadratic_program_examples.h"
@@ -16,7 +21,11 @@
 namespace drake {
 namespace solvers {
 namespace test {
+
 const double kTol = 1E-5;
+
+using testing::HasSubstr;
+
 GTEST_TEST(LinearProgramTest, TestGeneralLP) {
   // Test a linear program with only equality constraint.
   // min x(0) + 2 * x(1)
@@ -240,6 +249,13 @@ GTEST_TEST(QPtest, TestUnitBallExample) {
   }
 }
 
+GTEST_TEST(QPtest, TestQuadraticCostVariableOrder) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    TestQuadraticCostVariableOrder(solver);
+  }
+}
+
 GTEST_TEST(TestDuplicatedVariableQuadraticProgram, Test) {
   ClarabelSolver solver;
   if (solver.available()) {
@@ -326,6 +342,141 @@ GTEST_TEST(TestSOCP, TestSocpDuplicatedVariable2) {
   TestSocpDuplicatedVariable2(solver, std::nullopt, 1E-6);
 }
 
+GTEST_TEST(TestSOCP, TestSocpDuplicatedVariable3) {
+  ClarabelSolver solver;
+  TestSocpDuplicatedVariable3(solver, std::nullopt, 1E-4);
+}
+
+GTEST_TEST(TestL2NormCost, ShortestDistanceToThreePoints) {
+  ClarabelSolver solver;
+  ShortestDistanceToThreePoints tester{};
+  tester.CheckSolution(solver);
+}
+
+GTEST_TEST(TestL2NormCost, ShortestDistanceFromCylinderToPoint) {
+  ClarabelSolver solver;
+  ShortestDistanceFromCylinderToPoint tester{};
+  tester.CheckSolution(solver);
+}
+
+GTEST_TEST(TestL2NormCost, ShortestDistanceFromPlaneToTwoPoints) {
+  ClarabelSolver solver;
+  ShortestDistanceFromPlaneToTwoPoints tester{};
+  tester.CheckSolution(solver, std::nullopt, 5E-4);
+}
+
+GTEST_TEST(TestSemidefiniteProgram, TrivialSDP) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    TestTrivialSDP(solver, kTol);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, CommonLyapunov) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    FindCommonLyapunov(solver, {}, kTol);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, OuterEllipsoid) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    FindOuterEllipsoid(solver, {}, kTol);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, EigenvalueProblem) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    SolveEigenvalueProblem(solver, {}, kTol, /*check_dual=*/true);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, SolveSDPwithQuadraticCosts) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    SolveSDPwithQuadraticCosts(solver, kTol);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, TestSDPDualSolution1) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    TestSDPDualSolution1(solver, kTol, /*complemantarity_tol=*/1E-5);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, SolveSDPwithSecondOrderConeExample1) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    SolveSDPwithSecondOrderConeExample1(solver, kTol);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, SolveSDPwithSecondOrderConeExample2) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    SolveSDPwithSecondOrderConeExample2(solver, kTol);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, SolveSDPwithOverlappingVariables) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    SolveSDPwithOverlappingVariables(solver, kTol);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, TestTrivial1x1SDP) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    TestTrivial1x1SDP(solver, 1E-5, /*check_dual=*/true, /*dual_tol=*/1E-5);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, TestTrivial2x2SDP) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    TestTrivial2x2SDP(solver, 1E-5, /*check_dual=*/true, /*dual_tol=*/1E-5);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, Test1x1with3x3SDP) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    Test1x1with3x3SDP(solver, 1E-4, /*check_dual=*/true, /*dual_tol=*/1E-4);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, Test2x2with3x3SDP) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    Test2x2with3x3SDP(solver, 1E-3, /*check_dual=*/true, /*dual_tol*/ 1E-2);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, TestTrivial1x1LMI) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    TestTrivial1x1LMI(solver, 1E-5, /*check_dual=*/true, /*dual_tol=*/1E-7);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, Test2X2LMI) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    Test2x2LMI(solver, 1E-7, /*check_dual=*/true, /*dual_tol=*/1E-7);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, TestHankel) {
+  ClarabelSolver solver;
+  if (solver.available()) {
+    TestHankel(solver, 1E-5, /*check_dual=*/true, /*dual_tol=*/1E-5);
+  }
+}
+
 GTEST_TEST(TestExponentialConeProgram, ExponentialConeTrivialExample) {
   ClarabelSolver solver;
   if (solver.available()) {
@@ -350,11 +501,12 @@ GTEST_TEST(TestExponentialConeProgram, MinimalEllipsoidConveringPoints) {
 }
 
 GTEST_TEST(TestExponentialConeProgram, MatrixLogDeterminantLower) {
-  ClarabelSolver scs_solver;
-  if (scs_solver.available()) {
-    MatrixLogDeterminantLower(scs_solver, kTol);
+  ClarabelSolver solver;
+  if (solver.available()) {
+    MatrixLogDeterminantLower(solver, kTol);
   }
 }
+
 GTEST_TEST(TestSos, UnivariateQuarticSos) {
   UnivariateQuarticSos dut;
   ClarabelSolver solver;
@@ -416,6 +568,78 @@ GTEST_TEST(TestOptions, SetMaxIter) {
   }
 }
 
+GTEST_TEST(TestOptions, StandaloneReproduction) {
+  MathematicalProgram prog;
+  const auto x = prog.NewContinuousVariables<3>("x");
+  prog.AddLinearEqualityConstraint(x(0) + x(1) == 1);
+  prog.AddLinearConstraint(x(0) + x(1) + x(2) >= 0);
+  prog.AddLorentzConeConstraint(Vector2<symbolic::Expression>(x(0), x(1)));
+  prog.AddExponentialConeConstraint(
+      Vector3<symbolic::Expression>(x(2), x(0), x(1)));
+  const auto Y = prog.NewSymmetricContinuousVariables<3>("Y");
+  prog.AddPositiveSemidefiniteConstraint(Y);
+
+  ClarabelSolver solver;
+  if (solver.available()) {
+    SolverOptions solver_options;
+    const std::string repro_file_name = temp_directory() + "/reproduction.py";
+    solver_options.SetOption(
+        CommonSolverOption::kStandaloneReproductionFileName, repro_file_name);
+    solver.Solve(prog, std::nullopt, solver_options);
+
+    // Read in the reproduction file.
+    std::ifstream input_stream(repro_file_name);
+    ASSERT_TRUE(input_stream.is_open());
+    std::stringstream buffer;
+    buffer << input_stream.rdbuf();
+    std::string repro_str = buffer.str();
+
+    EXPECT_THAT(repro_str, HasSubstr("import clarabel"));
+    EXPECT_THAT(repro_str, HasSubstr("ZeroConeT"));
+    EXPECT_THAT(repro_str, HasSubstr("NonnegativeConeT"));
+    EXPECT_THAT(repro_str, HasSubstr("SecondOrderConeT"));
+    EXPECT_THAT(repro_str, HasSubstr("PSDTriangleConeT"));
+    EXPECT_THAT(repro_str, HasSubstr("ExponentialConeT"));
+    EXPECT_THAT(repro_str, HasSubstr("solve"));
+  }
+}
+
+// Ensure that when we have no linear constraints, we do not generate programs
+// with empty Zero nor Nonnegative cones.
+GTEST_TEST(TestOptions, EmptyCones) {
+  MathematicalProgram prog;
+  const auto x = prog.NewContinuousVariables<3>("x");
+  prog.AddLorentzConeConstraint(Vector2<symbolic::Expression>(x(0), x(1)));
+  prog.AddExponentialConeConstraint(
+      Vector3<symbolic::Expression>(x(2), x(0), x(1)));
+  const auto Y = prog.NewSymmetricContinuousVariables<3>("Y");
+  prog.AddPositiveSemidefiniteConstraint(Y);
+
+  ClarabelSolver solver;
+  if (solver.available()) {
+    SolverOptions solver_options;
+    const std::string repro_file_name = temp_directory() + "/reproduction.py";
+    solver_options.SetOption(
+        CommonSolverOption::kStandaloneReproductionFileName, repro_file_name);
+    solver.Solve(prog, std::nullopt, solver_options);
+
+    // Read in the reproduction file.
+    std::ifstream input_stream(repro_file_name);
+    ASSERT_TRUE(input_stream.is_open());
+    std::stringstream buffer;
+    buffer << input_stream.rdbuf();
+    std::string repro_str = buffer.str();
+
+    EXPECT_THAT(repro_str, HasSubstr("import clarabel"));
+    EXPECT_THAT(repro_str, Not(HasSubstr("ZeroConeT")));
+    EXPECT_THAT(repro_str, Not(HasSubstr("NonnegativeConeT")));
+    EXPECT_THAT(repro_str, HasSubstr("SecondOrderConeT"));
+    EXPECT_THAT(repro_str, HasSubstr("PSDTriangleConeT"));
+    EXPECT_THAT(repro_str, HasSubstr("ExponentialConeT"));
+    EXPECT_THAT(repro_str, HasSubstr("solve"));
+  }
+}
+
 GTEST_TEST(TestOptions, unrecognized) {
   SimpleSos1 dut;
   ClarabelSolver solver;
@@ -424,9 +648,36 @@ GTEST_TEST(TestOptions, unrecognized) {
     solver_options.SetOption(solver.id(), "bad_unrecognized", 1);
     DRAKE_EXPECT_THROWS_MESSAGE(
         solver.Solve(dut.prog(), std::nullopt, solver_options),
-        ".*unrecognized solver options bad_unrecognized.*");
+        ".*not recognized.*bad_unrecognized.*");
   }
 }
+
+GTEST_TEST(TestZeroStepSize, ZeroStepSize) {
+  // This is a program configuration that causes Clarabel to crash (and hence
+  // crash Drake) in version 0.6.0. In version 0.7.1, this configuration causes
+  // the solver to report InsufficientProgress.
+  ClarabelSolver solver;
+  MathematicalProgram prog;
+  const auto y = prog.NewContinuousVariables<2>("y");
+  MatrixX<symbolic::Expression> mat(2, 2);
+  mat << y(0, 0), 0.5, 0.5, y(1);
+  prog.AddLinearMatrixInequalityConstraint(mat);
+  prog.AddLogDeterminantLowerBoundConstraint(mat, 1);
+  prog.AddLinearCost(-y(0));
+  SolverOptions options;
+  options.SetOption(solver.id(), "max_step_fraction", 1e-10);
+  options.SetOption(CommonSolverOption::kPrintToConsole, true);
+  if (solver.available()) {
+    auto result = solver.Solve(prog, std::nullopt, options);
+    // The program has cost unbounded above and so the dual is infeasible, but
+    // the step size fraction forces the solver to make insufficient progress.
+    EXPECT_EQ(result.get_solution_result(),
+              SolutionResult::kSolverSpecificError);
+    EXPECT_EQ(result.get_solver_details<ClarabelSolver>().status,
+              "InsufficientProgress");
+  }
+}
+
 }  // namespace test
 }  // namespace solvers
 }  // namespace drake

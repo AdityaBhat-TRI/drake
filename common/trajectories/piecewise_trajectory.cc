@@ -21,6 +21,9 @@ PiecewiseTrajectory<T>::PiecewiseTrajectory(const std::vector<T>& breaks)
 }
 
 template <typename T>
+PiecewiseTrajectory<T>::~PiecewiseTrajectory() = default;
+
+template <typename T>
 boolean<T> PiecewiseTrajectory<T>::is_time_in_range(const T& time) const {
   return (time >= start_time() && time <= end_time());
 }
@@ -45,16 +48,6 @@ T PiecewiseTrajectory<T>::end_time(int segment_number) const {
 template <typename T>
 T PiecewiseTrajectory<T>::duration(int segment_number) const {
   return end_time(segment_number) - start_time(segment_number);
-}
-
-template <typename T>
-T PiecewiseTrajectory<T>::start_time() const {
-  return start_time(0);
-}
-
-template <typename T>
-T PiecewiseTrajectory<T>::end_time() const {
-  return end_time(get_number_of_segments() - 1);
 }
 
 template <typename T>
@@ -119,6 +112,16 @@ std::vector<T> PiecewiseTrajectory<T>::RandomSegmentTimes(
 }
 
 template <typename T>
+T PiecewiseTrajectory<T>::do_start_time() const {
+  return start_time(0);
+}
+
+template <typename T>
+T PiecewiseTrajectory<T>::do_end_time() const {
+  return end_time(get_number_of_segments() - 1);
+}
+
+template <typename T>
 bool PiecewiseTrajectory<T>::SegmentTimesEqual(
     const PiecewiseTrajectory<T>& other, double tol) const {
   if (breaks_.size() != other.breaks_.size()) return false;
@@ -133,4 +136,4 @@ bool PiecewiseTrajectory<T>::SegmentTimesEqual(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::PiecewiseTrajectory)
+    class drake::trajectories::PiecewiseTrajectory);

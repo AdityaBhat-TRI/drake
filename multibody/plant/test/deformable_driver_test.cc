@@ -31,11 +31,11 @@ class DeformableDriverTest : public ::testing::Test {
   void SetUp() override {
     systems::DiagramBuilder<double> builder;
     std::tie(plant_, scene_graph_) = AddMultibodyPlantSceneGraph(&builder, kDt);
-    auto deformable_model = make_unique<DeformableModel<double>>(plant_);
+    DeformableModel<double>& deformable_model =
+        plant_->mutable_deformable_model();
     constexpr double kRezHint = 0.5;
-    body_id_ = RegisterSphere(deformable_model.get(), kRezHint);
-    model_ = deformable_model.get();
-    plant_->AddPhysicalModel(std::move(deformable_model));
+    body_id_ = RegisterSphere(&deformable_model, kRezHint);
+    model_ = &deformable_model;
     const RigidBody<double>& body = plant_->AddRigidBody(
         "rigid_body", SpatialInertia<double>::SolidSphereWithMass(1.0, 1.0));
     // N.B. Deformables are only supported with the SAP solver.
@@ -49,10 +49,6 @@ class DeformableDriverTest : public ::testing::Test {
     plant_->SetDiscreteUpdateManager(std::move(contact_manager));
     driver_ = manager_->deformable_driver();
     DRAKE_DEMAND(driver_ != nullptr);
-
-    builder.Connect(model_->vertex_positions_port(),
-                    scene_graph_->get_source_configuration_port(
-                        plant_->get_source_id().value()));
     diagram_ = builder.Build();
     diagram_context_ = diagram_->CreateDefaultContext();
     plant_context_ =
@@ -164,6 +160,24 @@ TEST_F(DeformableDriverTest, FreeMotionFemState) {
       CompareMatrices(free_motion_fem_state.GetVelocities(), next_v, kTol));
   EXPECT_TRUE(CompareMatrices(free_motion_fem_state.GetAccelerations(), next_a,
                               kTol / kDt));
+}
+
+TEST_F(DeformableDriverTest, FreeMotionFemStateDisabled) {
+  model_->Disable(body_id_, plant_context_);
+
+  const VectorX<double> q = model_->GetReferencePositions(body_id_);
+  const int num_dofs = q.size();
+  const FemState<double>& free_motion_fem_state =
+      EvalFreeMotionFemState(*plant_context_, DeformableBodyIndex(0));
+  // Free motion velocity/acceleration should be exactly zero for disabled
+  // bodies. Position should remain unchanged.
+  const VectorX<double> next_a = VectorX<double>::Zero(num_dofs);
+  const VectorX<double> next_v = VectorX<double>::Zero(num_dofs);
+  const VectorX<double> next_q = q;
+  EXPECT_TRUE(CompareMatrices(free_motion_fem_state.GetPositions(), next_q));
+  EXPECT_TRUE(CompareMatrices(free_motion_fem_state.GetVelocities(), next_v));
+  EXPECT_TRUE(
+      CompareMatrices(free_motion_fem_state.GetAccelerations(), next_a));
 }
 
 TEST_F(DeformableDriverTest, NextFemState) {

@@ -47,6 +47,27 @@ std::string ToLatexCost(const Cost& cost,
 
 }  // namespace
 
+LinearCost::~LinearCost() = default;
+
+void LinearCost::UpdateCoefficients(
+    const Eigen::Ref<const Eigen::VectorXd>& new_a, double new_b) {
+  if (new_a.rows() != a_.rows()) {
+    throw std::runtime_error("Can't change the number of decision variables");
+  }
+
+  a_ = new_a;
+  b_ = new_b;
+}
+
+void LinearCost::update_coefficient_entry(int i, double val) {
+  DRAKE_DEMAND(i >= 0 && i < a_.rows());
+  a_[i] = val;
+}
+
+void LinearCost::update_constant_term(double new_b) {
+  b_ = new_b;
+}
+
 template <typename DerivedX, typename U>
 void LinearCost::DoEvalGeneric(const Eigen::MatrixBase<DerivedX>& x,
                                VectorX<U>* y) const {
@@ -76,6 +97,30 @@ std::ostream& LinearCost::DoDisplay(
 std::string LinearCost::DoToLatex(const VectorX<symbolic::Variable>& vars,
                                   int precision) const {
   return ToLatexCost(*this, vars, precision);
+}
+
+QuadraticCost::~QuadraticCost() = default;
+
+void QuadraticCost::UpdateHessianEntry(int i, int j, double val,
+                                       std::optional<bool> is_hessian_psd) {
+  DRAKE_DEMAND(i >= 0 && i < Q_.rows());
+  DRAKE_DEMAND(j >= 0 && j < Q_.rows());
+  Q_(i, j) = val;
+  Q_(j, i) = val;
+  if (is_hessian_psd.has_value()) {
+    is_convex_ = is_hessian_psd.value();
+  } else {
+    is_convex_ = CheckHessianPsd();
+  }
+}
+
+void QuadraticCost::update_linear_coefficient_entry(int i, double val) {
+  DRAKE_DEMAND(i >= 0 && i < b_.rows());
+  b_(i) = val;
+}
+
+void QuadraticCost::update_constant_term(double new_c) {
+  c_ = new_c;
 }
 
 template <typename DerivedX, typename U>
@@ -151,8 +196,11 @@ shared_ptr<QuadraticCost> Make2NormSquaredCost(
 L1NormCost::L1NormCost(const Eigen::Ref<const Eigen::MatrixXd>& A,
                        const Eigen::Ref<const Eigen::VectorXd>& b)
     : Cost(A.cols()), A_(A), b_(b) {
-  DRAKE_DEMAND(A_.rows() == b_.rows());
+  set_is_thread_safe(true);
+  DRAKE_THROW_UNLESS(A_.rows() == b_.rows());
 }
+
+L1NormCost::~L1NormCost() = default;
 
 void L1NormCost::UpdateCoefficients(
     const Eigen::Ref<const Eigen::MatrixXd>& new_A,
@@ -166,6 +214,17 @@ void L1NormCost::UpdateCoefficients(
 
   A_ = new_A;
   b_ = new_b;
+}
+
+void L1NormCost::update_A_entry(int i, int j, double val) {
+  DRAKE_DEMAND(i >= 0 && i < A_.rows());
+  DRAKE_DEMAND(j >= 0 && j < A_.cols());
+  A_(i, j) = val;
+}
+
+void L1NormCost::update_b_entry(int i, double val) {
+  DRAKE_DEMAND(i >= 0 && i < b_.rows());
+  b_(i) = val;
 }
 
 void L1NormCost::DoEval(const Eigen::Ref<const Eigen::VectorXd>& x,
@@ -200,19 +259,41 @@ std::string L1NormCost::DoToLatex(const VectorX<symbolic::Variable>& vars,
 L2NormCost::L2NormCost(const Eigen::Ref<const Eigen::MatrixXd>& A,
                        const Eigen::Ref<const Eigen::VectorXd>& b)
     : Cost(A.cols()), A_(A), b_(b) {
-  DRAKE_DEMAND(A_.rows() == b_.rows());
+  set_is_thread_safe(true);
+  DRAKE_THROW_UNLESS(A_.get_as_sparse().rows() == b_.rows());
 }
+
+L2NormCost::L2NormCost(const Eigen::SparseMatrix<double>& A,
+                       const Eigen::Ref<const Eigen::VectorXd>& b)
+    : Cost(A.cols()), A_(A), b_(b) {
+  set_is_thread_safe(true);
+  DRAKE_THROW_UNLESS(A_.get_as_sparse().rows() == b_.rows());
+}
+
+L2NormCost::~L2NormCost() = default;
 
 void L2NormCost::UpdateCoefficients(
     const Eigen::Ref<const Eigen::MatrixXd>& new_A,
     const Eigen::Ref<const Eigen::VectorXd>& new_b) {
-  if (new_A.cols() != A_.cols()) {
+  if (new_A.cols() != A_.get_as_sparse().cols()) {
     throw std::runtime_error("Can't change the number of decision variables");
   }
   if (new_A.rows() != new_b.rows()) {
     throw std::runtime_error("A and b must have the same number of rows.");
   }
+  A_ = new_A;
+  b_ = new_b;
+}
 
+void L2NormCost::UpdateCoefficients(
+    const Eigen::SparseMatrix<double>& new_A,
+    const Eigen::Ref<const Eigen::VectorXd>& new_b) {
+  if (new_A.cols() != A_.get_as_sparse().cols()) {
+    throw std::runtime_error("Can't change the number of decision variables");
+  }
+  if (new_A.rows() != new_b.rows()) {
+    throw std::runtime_error("A and b must have the same number of rows.");
+  }
   A_ = new_A;
   b_ = new_b;
 }
@@ -220,19 +301,19 @@ void L2NormCost::UpdateCoefficients(
 void L2NormCost::DoEval(const Eigen::Ref<const Eigen::VectorXd>& x,
                         Eigen::VectorXd* y) const {
   y->resize(1);
-  (*y)(0) = (A_ * x + b_).norm();
+  (*y)(0) = (A_.GetAsDense() * x + b_).norm();
 }
 
 void L2NormCost::DoEval(const Eigen::Ref<const AutoDiffVecXd>& x,
                         AutoDiffVecXd* y) const {
   y->resize(1);
-  (*y)(0) = math::DifferentiableNorm(A_ * x + b_);
+  (*y)(0) = math::DifferentiableNorm(A_.GetAsDense() * x + b_);
 }
 
 void L2NormCost::DoEval(const Eigen::Ref<const VectorX<symbolic::Variable>>& x,
                         VectorX<symbolic::Expression>* y) const {
   y->resize(1);
-  (*y)(0) = sqrt((A_ * x + b_).squaredNorm());
+  (*y)(0) = sqrt((A_.GetAsDense() * x + b_).squaredNorm());
 }
 
 std::ostream& L2NormCost::DoDisplay(
@@ -242,15 +323,19 @@ std::ostream& L2NormCost::DoDisplay(
 
 std::string L2NormCost::DoToLatex(const VectorX<symbolic::Variable>& vars,
                                   int precision) const {
-  return fmt::format("\\left|{}\\right|_2",
-                     symbolic::ToLatex((A_ * vars + b_).eval(), precision));
+  return fmt::format(
+      "\\left|{}\\right|_2",
+      symbolic::ToLatex((A_.GetAsDense() * vars + b_).eval(), precision));
 }
 
 LInfNormCost::LInfNormCost(const Eigen::Ref<const Eigen::MatrixXd>& A,
                            const Eigen::Ref<const Eigen::VectorXd>& b)
     : Cost(A.cols()), A_(A), b_(b) {
-  DRAKE_DEMAND(A_.rows() == b_.rows());
+  set_is_thread_safe(true);
+  DRAKE_THROW_UNLESS(A_.rows() == b_.rows());
 }
+
+LInfNormCost::~LInfNormCost() = default;
 
 void LInfNormCost::UpdateCoefficients(
     const Eigen::Ref<const Eigen::MatrixXd>& new_A,
@@ -264,6 +349,17 @@ void LInfNormCost::UpdateCoefficients(
 
   A_ = new_A;
   b_ = new_b;
+}
+
+void LInfNormCost::update_A_entry(int i, int j, double val) {
+  DRAKE_DEMAND(i >= 0 && i < A_.rows());
+  DRAKE_DEMAND(j >= 0 && j < A_.cols());
+  A_(i, j) = val;
+}
+
+void LInfNormCost::update_b_entry(int i, double val) {
+  DRAKE_DEMAND(i >= 0 && i < b_.rows());
+  b_(i) = val;
 }
 
 void LInfNormCost::DoEval(const Eigen::Ref<const Eigen::VectorXd>& x,
@@ -300,9 +396,12 @@ PerspectiveQuadraticCost::PerspectiveQuadraticCost(
     const Eigen::Ref<const Eigen::MatrixXd>& A,
     const Eigen::Ref<const Eigen::VectorXd>& b)
     : Cost(A.cols()), A_(A), b_(b) {
-  DRAKE_DEMAND(A_.rows() >= 2);
-  DRAKE_DEMAND(A_.rows() == b_.rows());
+  set_is_thread_safe(true);
+  DRAKE_THROW_UNLESS(A_.rows() >= 2);
+  DRAKE_THROW_UNLESS(A_.rows() == b_.rows());
 }
+
+PerspectiveQuadraticCost::~PerspectiveQuadraticCost() = default;
 
 void PerspectiveQuadraticCost::UpdateCoefficients(
     const Eigen::Ref<const Eigen::MatrixXd>& new_A,
@@ -316,6 +415,17 @@ void PerspectiveQuadraticCost::UpdateCoefficients(
 
   A_ = new_A;
   b_ = new_b;
+}
+
+void PerspectiveQuadraticCost::update_A_entry(int i, int j, double val) {
+  DRAKE_DEMAND(i >= 0 && i < A_.rows());
+  DRAKE_DEMAND(j >= 0 && j < A_.cols());
+  A_(i, j) = val;
+}
+
+void PerspectiveQuadraticCost::update_b_entry(int i, double val) {
+  DRAKE_DEMAND(i >= 0 && i < b_.rows());
+  b_(i) = val;
 }
 
 template <typename DerivedX, typename U>
@@ -358,7 +468,9 @@ ExpressionCost::ExpressionCost(const symbolic::Expression& e)
       evaluator_(std::make_unique<ExpressionConstraint>(
           Vector1<symbolic::Expression>{e},
           /* The ub, lb are unused but still required. */
-          Vector1d(0.0), Vector1d(0.0))) {}
+          Vector1d(0.0), Vector1d(0.0))) {
+  set_is_thread_safe(evaluator_->is_thread_safe());
+}
 
 const VectorXDecisionVariable& ExpressionCost::vars() const {
   return dynamic_cast<const ExpressionConstraint&>(*evaluator_).vars();

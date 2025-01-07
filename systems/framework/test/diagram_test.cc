@@ -1,6 +1,7 @@
 #include "drake/systems/framework/diagram.h"
 
 #include <Eigen/Dense>
+#include <fmt/ranges.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -372,7 +373,7 @@ kitchen sink"!) */
 template <typename T>
 class KitchenSinkStateAndParameters final : public LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(KitchenSinkStateAndParameters)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(KitchenSinkStateAndParameters);
 
   KitchenSinkStateAndParameters() :
       LeafSystem<T>(systems::SystemTypeTag<KitchenSinkStateAndParameters>{}) {
@@ -4081,6 +4082,35 @@ GTEST_TEST(ImplicitTimeDerivatives, DiagramProcessing) {
 
   diagram->CalcImplicitTimeDerivativesResidual(*context, *xdot, &residual);
   EXPECT_EQ(residual, expected_result);
+}
+
+// Life support data has a lifetime that is the union of the builder and the
+// resulting diagram.
+GTEST_TEST(LifeSupport, Lifetime) {
+  std::weak_ptr<int> spy;
+  {
+    auto do_build = [&]() {
+      auto thing = std::make_shared<int>(42);
+      spy = thing;
+      DiagramBuilder<double> builder;
+      builder.get_mutable_life_support().attributes.emplace("thing",
+                                                            std::move(thing));
+      // Thing is living inside builder.
+      EXPECT_FALSE(builder.get_mutable_life_support().attributes.empty());
+      EXPECT_FALSE(spy.expired());
+      builder.AddSystem<EmptySystem<double>>();
+      auto result = builder.Build();
+      // Thing has been transferred to diagram.
+      EXPECT_TRUE(builder.get_mutable_life_support().attributes.empty());
+      EXPECT_FALSE(spy.expired());
+      return result;
+    };
+    auto diagram = do_build();
+    // Builder is gone; thing remains.
+    EXPECT_FALSE(spy.expired());
+  }
+  // Diagram is gone; thing is now also gone.
+  EXPECT_TRUE(spy.expired());
 }
 
 }  // namespace

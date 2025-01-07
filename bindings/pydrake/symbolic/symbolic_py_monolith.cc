@@ -7,6 +7,7 @@
 #include "drake/bindings/pydrake/documentation_pybind.h"
 #include "drake/bindings/pydrake/math_operators_pybind.h"
 #include "drake/bindings/pydrake/pydrake_pybind.h"
+#include "drake/bindings/pydrake/symbolic/symbolic_py.h"
 #include "drake/bindings/pydrake/symbolic/symbolic_py_unapply.h"
 #include "drake/bindings/pydrake/symbolic_types_pybind.h"
 #include "drake/common/symbolic/decompose.h"
@@ -27,6 +28,13 @@ void DefineSymbolicMonolith(py::module m) {
   // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
   using namespace drake::symbolic;
   constexpr auto& doc = pydrake_doc.drake.symbolic;
+
+  // These declarations must be first, because low-level operators return them.
+  py::class_<Expression> expr_cls(m, "Expression", doc.Expression.doc);
+  py::class_<Formula> formula_cls(m, "Formula", doc.Formula.doc);
+  py::class_<Polynomial> polynomial_cls(m, "Polynomial", doc.Polynomial.doc);
+  py::class_<RationalFunction> rat_fun_cls(
+      m, "RationalFunction", doc.RationalFunction.doc);
 
   // TODO(m-chaturvedi) Add Pybind11 documentation for operator overloads, etc.
   py::class_<Variable> var_cls(m, "Variable", doc.Variable.doc);
@@ -303,7 +311,6 @@ void DefineSymbolicMonolith(py::module m) {
   }
 
   // TODO(m-chaturvedi) Add Pybind11 documentation for operator overloads, etc.
-  py::class_<Expression> expr_cls(m, "Expression", doc.Expression.doc);
   expr_cls.def(py::init<>(), doc.Expression.ctor.doc_0args)
       .def(py::init<double>(), py::arg("constant"),
           doc.Expression.ctor.doc_1args_constant)
@@ -347,6 +354,8 @@ void DefineSymbolicMonolith(py::module m) {
           py::arg("env"), doc.Expression.EvaluatePartial.doc)
       .def("GetVariables", &Expression::GetVariables,
           doc.Expression.GetVariables.doc)
+      .def("GetFreeVariables", &Expression::GetFreeVariables,
+          doc.Expression.GetFreeVariables.doc)
       .def(
           "Substitute",
           [](const Expression& self, const Variable& var, const Expression& e) {
@@ -561,7 +570,6 @@ void DefineSymbolicMonolith(py::module m) {
             cls_doc.PositiveSemidefinite.doc);
   }
 
-  py::class_<Formula> formula_cls(m, "Formula", doc.Formula.doc);
   formula_cls.def(py::init<>(), doc.Formula.ctor.doc_0args)
       .def(py::init<bool>(), py::arg("value").noconvert(),
           doc.Formula.ctor.doc_1args_value)
@@ -760,10 +768,16 @@ void DefineSymbolicMonolith(py::module m) {
           py::arg("sort_monomial") = false,
           doc.CalcMonomialBasisOrderUpToOne.doc);
 
+  py::class_<Polynomial::SubstituteAndExpandCacheData>(m,
+      "SubstituteAndExpandCacheData",
+      doc.Polynomial.SubstituteAndExpandCacheData.doc)
+      .def(py::init<>())
+      .def("get_data", &Polynomial::SubstituteAndExpandCacheData::get_data,
+          py_rvp::reference);
+
   using symbolic::Polynomial;
 
   // TODO(m-chaturvedi) Add Pybind11 documentation for operator overloads, etc.
-  py::class_<Polynomial> polynomial_cls(m, "Polynomial", doc.Polynomial.doc);
   polynomial_cls.def(py::init<>(), doc.Polynomial.ctor.doc_0args)
       .def(py::init<Polynomial::MapType>(), py::arg("map"),
           doc.Polynomial.ctor.doc_1args_map)
@@ -926,13 +940,6 @@ void DefineSymbolicMonolith(py::module m) {
           },
           py::arg("vars"), doc.Polynomial.Jacobian.doc);
 
-  py::class_<Polynomial::SubstituteAndExpandCacheData>(m,
-      "SubstituteAndExpandCacheData",
-      doc.Polynomial.SubstituteAndExpandCacheData.doc)
-      .def(py::init<>())
-      .def("get_data", &Polynomial::SubstituteAndExpandCacheData::get_data,
-          py_rvp::reference);
-
   // Bind CalcPolynomialWLowerTriangularPart
   m.def(
        "CalcPolynomialWLowerTriangularPart",
@@ -964,8 +971,6 @@ void DefineSymbolicMonolith(py::module m) {
           py::arg("monomial_basis"), py::arg("gram_lower"),
           doc.CalcPolynomialWLowerTriangularPart.doc);
 
-  py::class_<RationalFunction> rat_fun_cls(
-      m, "RationalFunction", doc.RationalFunction.doc);
   rat_fun_cls.def(py::init<>(), doc.RationalFunction.ctor.doc_0args)
       .def(py::init<Polynomial, Polynomial>(), py::arg("numerator"),
           py::arg("denominator"),
@@ -1164,7 +1169,10 @@ void DefineSymbolicMonolith(py::module m) {
           doc.DecomposeAffineExpression.doc)
       .def("DecomposeLumpedParameters", &DecomposeLumpedParameters,
           py::arg("f"), py::arg("parameters"),
-          doc.DecomposeLumpedParameters.doc);
+          doc.DecomposeLumpedParameters.doc)
+      .def("DecomposeL2NormExpression", &DecomposeL2NormExpression,
+          py::arg("e"), py::arg("psd_tol") = 1e-8,
+          py::arg("coefficient_tol") = 1e-8, doc.DecomposeL2NormExpression.doc);
 
   // Bind free function in replace_bilinear_terms.
   m.def("ReplaceBilinearTerms", &ReplaceBilinearTerms, py::arg("e"),

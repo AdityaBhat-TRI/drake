@@ -93,6 +93,13 @@ GTEST_TEST(QPtest, TestUnitBallExample) {
   }
 }
 
+GTEST_TEST(QPtest, TestQuadraticCostVariableOrder) {
+  SnoptSolver solver;
+  if (solver.available()) {
+    TestQuadraticCostVariableOrder(solver);
+  }
+}
+
 GTEST_TEST(SnoptTest, NameTest) {
   EXPECT_EQ(SnoptSolver::id().name(), "SNOPT");
 }
@@ -133,6 +140,7 @@ GTEST_TEST(SnoptTest, TestSetOption) {
   EXPECT_EQ(solver_details.xmul.size(), 3);
   EXPECT_EQ(solver_details.Fmul.size(), 2);
   EXPECT_EQ(solver_details.F.size(), 2);
+  EXPECT_GT(solver_details.solve_time, 0);
 }
 
 GTEST_TEST(SnoptTest, TestPrintFile) {
@@ -379,15 +387,15 @@ GTEST_TEST(SnoptTest, MultiThreadTest) {
         *contents = std::regex_replace(
             *contents, std::regex(".Printer........................\\d"),
             "(Printer)..............      ####");
+      }
+      EXPECT_EQ(contents_single, contents_multi);
     }
-    EXPECT_EQ(contents_single, contents_multi);
   }
-}
 }
 
 class AutoDiffOnlyCost final : public drake::solvers::Cost {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(AutoDiffOnlyCost)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(AutoDiffOnlyCost);
 
   AutoDiffOnlyCost() : drake::solvers::Cost(1) {}
 
@@ -539,26 +547,28 @@ GTEST_TEST(SnoptSolverTest, EckhardtDualSolution) {
 GTEST_TEST(SnoptSolverTest, BadIntegerParameter) {
   SnoptSolver solver;
   MathematicalProgram prog;
-  prog.SetSolverOption(solver.solver_id(), "not an option", 15);
+  prog.SetSolverOption(solver.solver_id(), "not_an_option", 15);
   DRAKE_EXPECT_THROWS_MESSAGE(
       solver.Solve(prog),
-      "Error setting Snopt integer parameter not an option");
+      "Error setting Snopt integer parameter not_an_option=15");
 }
 
 GTEST_TEST(SnoptSolverTest, BadDoubleParameter) {
   SnoptSolver solver;
   MathematicalProgram prog;
-  prog.SetSolverOption(solver.solver_id(), "not an option", 15.0);
+  prog.SetSolverOption(solver.solver_id(), "not_an_option", 15.1);
   DRAKE_EXPECT_THROWS_MESSAGE(
-      solver.Solve(prog), "Error setting Snopt double parameter not an option");
+      solver.Solve(prog),
+      "Error setting Snopt double parameter not_an_option=15.1");
 }
 
 GTEST_TEST(SnoptSolverTest, BadStringParameter) {
   SnoptSolver solver;
   MathematicalProgram prog;
-  prog.SetSolverOption(solver.solver_id(), "not an option", "test");
+  prog.SetSolverOption(solver.solver_id(), "not_an_option", "test");
   DRAKE_EXPECT_THROWS_MESSAGE(
-      solver.Solve(prog), "Error setting Snopt string parameter not an option");
+      solver.Solve(prog),
+      "Error setting Snopt string parameter not_an_option=test");
 }
 
 GTEST_TEST(SnoptSolverTest, TestNonconvexQP) {

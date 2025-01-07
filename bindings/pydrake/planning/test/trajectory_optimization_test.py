@@ -19,9 +19,17 @@ from pydrake.geometry.optimization import (
     ConvexSet,
     GraphOfConvexSetsOptions,
     GraphOfConvexSets,
+    GcsGraphvizOptions,
     HPolyhedron,
     Point,
     VPolytope,
+)
+from pydrake.solvers import (
+    Binding,
+    Cost,
+    Constraint,
+    ExpressionCost,
+    ExpressionConstraint
 )
 from pydrake.multibody.plant import MultibodyPlant
 import pydrake.solvers as mp
@@ -36,11 +44,6 @@ from pydrake.trajectories import (
 from pydrake.symbolic import Variable
 from pydrake.systems.framework import InputPortSelection
 from pydrake.systems.primitives import LinearSystem
-
-
-def GurobiOrMosekSolverAvailable():
-    return (mp.MosekSolver().available() and mp.MosekSolver().enabled()) or (
-        mp.GurobiSolver().available() and mp.GurobiSolver().enabled())
 
 
 class TestTrajectoryOptimization(unittest.TestCase):
@@ -253,6 +256,7 @@ class TestTrajectoryOptimization(unittest.TestCase):
 
         trajopt.AddDurationCost(weight=1)
         trajopt.AddPathLengthCost(weight=1)
+        trajopt.AddPathEnergyCost(weight=1)
 
         result = mp.Solve(trajopt.prog())
         q = trajopt.ReconstructTrajectory(result=result)
@@ -261,8 +265,8 @@ class TestTrajectoryOptimization(unittest.TestCase):
 
     def test_gcs_trajectory_optimization_basic(self):
         """This based on the C++ GcsTrajectoryOptimizationTest.Basic test. It's
-        a simple test of the bindings that does not require MOSEK. It uses a
-        single region (the unit box), and plans a line segment inside that box.
+        a simple test of the bindings. It uses a single region (the unit box),
+        and plans a line segment inside that box.
         """
         gcs = GcsTrajectoryOptimization(num_positions=2)
         start = [-0.5, -0.5]
@@ -273,10 +277,18 @@ class TestTrajectoryOptimization(unittest.TestCase):
         self.assertIn(target, gcs.GetSubgraphs())
         regions = gcs.AddRegions(regions=[HPolyhedron.MakeUnitBox(2)],
                                  order=1, h_min=1.0)
+        self.assertEqual(len(regions.Edges()), 0)
 
         self.assertIn(regions, gcs.GetSubgraphs())
-        self.assertIn(gcs.AddEdges(source, regions),
-                      gcs.GetEdgesBetweenSubgraphs())
+        edges = gcs.AddEdges(from_subgraph=source,
+                             to_subgraph=regions,
+                             subspace=None,
+                             edges_between_regions=None,
+                             edge_offsets=None)
+        self.assertIn(edges, gcs.GetEdgesBetweenSubgraphs())
+        self.assertEqual(len(edges.Edges()), 1)
+        self.assertEqual(edges.Edges()[0].u(), source.Vertices()[0])
+        self.assertEqual(edges.Edges()[0].v(), regions.Vertices()[0])
         self.assertIn(gcs.AddEdges(regions, target),
                       gcs.GetEdgesBetweenSubgraphs())
         traj, result = gcs.SolvePath(source, target)
@@ -325,6 +337,113 @@ class TestTrajectoryOptimization(unittest.TestCase):
             restricted_traj.end_time()).squeeze()
         np.testing.assert_allclose(restricted_traj_start, start, atol=1e-6)
         np.testing.assert_allclose(restricted_traj_end, end, atol=1e-6)
+
+        # We can add additional costs and constraints to Subgraphs with the
+        # placeholder variables.
+        vertex_duration = regions.vertex_duration()
+        vertex_control_points = regions.vertex_control_points()
+        edge_constituent_vertex_durations = (
+            regions.edge_constituent_vertex_durations()
+        )
+        edge_constituent_vertex_control_points = (
+            regions.edge_constituent_vertex_control_points()
+        )
+
+        vertex_cost = sum([
+            vertex_duration,
+            vertex_control_points[0, 0],
+            vertex_control_points[0, 1],
+        ])
+        edge_cost = sum([
+            edge_constituent_vertex_durations[0],
+            edge_constituent_vertex_durations[1],
+            edge_constituent_vertex_control_points[0][0, 0],
+            edge_constituent_vertex_control_points[0][0, 1],
+            edge_constituent_vertex_control_points[1][0, 0],
+            edge_constituent_vertex_control_points[1][0, 1]
+        ])
+        vertex_constraint = vertex_cost >= 0
+        edge_constraint = edge_cost >= 0
+
+        regions.AddVertexCost(e=vertex_cost)
+        regions.AddVertexConstraint(e=vertex_constraint)
+        regions.AddEdgeCost(e=edge_cost)
+        regions.AddEdgeConstraint(e=edge_constraint)
+
+        all_transcriptions = {
+            GraphOfConvexSets.Transcription.kMIP,
+            GraphOfConvexSets.Transcription.kRelaxation,
+            GraphOfConvexSets.Transcription.kRestriction
+        }
+        regions.AddVertexCost(e=vertex_cost,
+                              use_in_transcription=all_transcriptions)
+        regions.AddVertexConstraint(e=vertex_constraint,
+                                    use_in_transcription=all_transcriptions)
+        regions.AddEdgeCost(e=edge_cost,
+                            use_in_transcription=all_transcriptions)
+        regions.AddEdgeConstraint(e=edge_constraint,
+                                  use_in_transcription=all_transcriptions)
+
+        to_bind_vertex_cost = ExpressionCost(vertex_cost)
+        to_bind_vertex_constraint = ExpressionConstraint([vertex_cost],
+                                                         [-1],
+                                                         [1])
+        to_bind_edge_cost = ExpressionCost(edge_cost)
+        to_bind_edge_constraint = ExpressionConstraint([edge_cost], [-1], [1])
+
+        restriction_only = {
+            GraphOfConvexSets.Transcription.kRestriction
+        }
+        regions.AddVertexCost(binding=Binding[Cost](
+                to_bind_vertex_cost, to_bind_vertex_cost.vars()),
+                use_in_transcription=restriction_only)
+        regions.AddVertexConstraint(binding=Binding[Constraint](
+                to_bind_vertex_constraint, to_bind_vertex_constraint.vars()),
+                use_in_transcription=restriction_only)
+        regions.AddEdgeCost(binding=Binding[Cost](
+                to_bind_edge_cost, to_bind_edge_cost.vars()),
+                use_in_transcription=restriction_only)
+        regions.AddEdgeConstraint(binding=Binding[Constraint](
+                to_bind_edge_constraint, to_bind_edge_constraint.vars()),
+                use_in_transcription=restriction_only)
+
+        # We can add additional costs and constraints to EdgesBetweenSubgraphs
+        # with the placeholder variables.
+        edge_constituent_vertex_durations = (
+            edges.edge_constituent_vertex_durations()
+        )
+        edge_constituent_vertex_control_points = (
+            edges.edge_constituent_vertex_control_points()
+        )
+        edge_cost = sum([
+            edge_constituent_vertex_durations[0],
+            edge_constituent_vertex_durations[1],
+            edge_constituent_vertex_control_points[0][0, 0],
+            edge_constituent_vertex_control_points[1][0, 0],
+            edge_constituent_vertex_control_points[1][0, 1]
+        ])
+        edge_constraint = edge_cost >= 0
+
+        edges.AddEdgeCost(e=edge_cost)
+        edges.AddEdgeConstraint(e=edge_constraint)
+
+        edges.AddEdgeCost(e=edge_cost,
+                          use_in_transcription=all_transcriptions)
+        edges.AddEdgeConstraint(e=edge_constraint,
+                                use_in_transcription=all_transcriptions)
+
+        to_bind_edge_cost = ExpressionCost(edge_cost)
+        to_bind_edge_constraint = ExpressionConstraint([edge_cost], [-1], [1])
+
+        edges.AddEdgeCost(binding=Binding[Cost](
+                to_bind_edge_cost, to_bind_edge_cost.vars()),
+                use_in_transcription=restriction_only)
+        edges.AddEdgeConstraint(binding=Binding[Constraint](
+                to_bind_edge_constraint, to_bind_edge_constraint.vars()),
+                use_in_transcription=restriction_only)
+
+        traj, result = gcs.SolvePath(source, target)
+        self.assertTrue(result.is_success())
 
         # Test that removing all subgraphs, removes all vertices and edges.
         self.assertEqual(len(gcs.graph_of_convex_sets().Vertices()),
@@ -534,9 +653,9 @@ class TestTrajectoryOptimization(unittest.TestCase):
                               GcsTrajectoryOptimization.EdgesBetweenSubgraphs)
         self.assertIn(main2_to_target, gcs.GetEdgesBetweenSubgraphs())
 
-        # Add final zero velocity constraints.
-        main2_to_target.AddVelocityBounds(lb=np.zeros(dimension),
-                                          ub=np.zeros(dimension))
+        # Add final zero velocity and acceleration.
+        main2_to_target.AddZeroDerivativeConstraints(derivative_order=1)
+        main2_to_target.AddZeroDerivativeConstraints(derivative_order=2)
 
         # This weight matrix penalizes movement in the y direction three
         # times more than in the x direction only for the main2 subgraph.
@@ -565,9 +684,6 @@ class TestTrajectoryOptimization(unittest.TestCase):
         options.convex_relaxation = True
         options.max_rounded_paths = 5
 
-        if not GurobiOrMosekSolverAvailable():
-            return
-
         traj, result = gcs.SolvePath(source=source,
                                      target=target,
                                      options=options)
@@ -587,20 +703,87 @@ class TestTrajectoryOptimization(unittest.TestCase):
                                              goal2[:, None], 6)
         self.assertTrue(traj.end_time() - traj.start_time() >= 10)
 
+        graphviz_options = GcsGraphvizOptions()
         self.assertIsInstance(
-            gcs.GetGraphvizString(result=result,
-                                  show_slack=True,
-                                  precision=3,
-                                  scientific=False), str)
+            gcs.GetGraphvizString(result=result, options=graphviz_options),
+            str
+        )
+
+        self.assertIsInstance(
+            gcs.GetGraphvizString(
+                result=result,
+                show_slacks=True,
+                show_vars=True,
+                show_flows=True,
+                show_costs=False,
+                scientific=True,
+                precision=3,
+            ),
+            str,
+        )
+
+        # In the follwoing, we test adding the bindings for nonlinear
+        # constraints.
+        max_acceleration = np.ones((2, 1))
+        max_jerk = 7.5 * np.ones((2, 1))
+
+        # Add global acceleration bounds.
+        gcs.AddNonlinearDerivativeBounds(
+            lb=-max_acceleration, ub=max_acceleration, derivative_order=2)
+
+        # Add the jerk bounds to each subgraph.
+        main1.AddNonlinearDerivativeBounds(
+            lb=-max_jerk, ub=max_jerk, derivative_order=3)
+        main2.AddNonlinearDerivativeBounds(
+            lb=-max_jerk, ub=max_jerk, derivative_order=3)
+
+        # Add half of the maximum acceleration and jerk bounds at the subspace
+        # point and region.
+        main1_to_main2_pt.AddVelocityBounds(
+            lb=-max_acceleration / 2, ub=max_acceleration / 2)
+        main1_to_main2_region.AddVelocityBounds(
+            lb=-max_acceleration / 2, ub=max_acceleration / 2)
+
+        main1_to_main2_pt.AddVelocityBounds(lb=-max_jerk / 2, ub=max_jerk / 2)
+        main1_to_main2_region.AddVelocityBounds(
+            lb=-max_jerk / 2, ub=max_jerk / 2)
+
+        # Add global velocity continuity.
+        gcs.AddContinuityConstraints(continuity_order=1)
+
+        # Add acceleration continuity to each subgraph.
+        main1.AddContinuityConstraints(continuity_order=2)
+        main2.AddContinuityConstraints(continuity_order=2)
+
+        # Add acceleration continuity at the subspace point and region.
+        main1_to_main2_pt.AddContinuityConstraints(continuity_order=2)
+        main1_to_main2_region.AddContinuityConstraints(continuity_order=2)
 
     def test_gcs_trajectory_optimization_wraparound(self):
         gcs_wraparound = GcsTrajectoryOptimization(
             num_positions=1, continuous_revolute_joints=[0])
         self.assertEqual(len(gcs_wraparound.continuous_revolute_joints()), 1)
-        gcs_wraparound.AddRegions(regions=[Point([0]), Point([2*np.pi])],
-                                  order=1,
-                                  edges_between_regions=[[0, 1]],
-                                  edge_offsets=[[2*np.pi]])
+        g1 = gcs_wraparound.AddRegions(regions=[Point([0]), Point([2*np.pi])],
+                                       order=1,
+                                       edges_between_regions=[[0, 1]],
+                                       edge_offsets=[[2*np.pi]])
+        g2 = gcs_wraparound.AddRegions(
+            regions=[VPolytope([[8*np.pi, 8*np.pi+1]])], order=2)
+        gcs_wraparound.AddEdges(g1, g2)
+        traj, result = gcs_wraparound.SolvePath(g1, g2)
+        self.assertTrue(result.is_success())
+
+        new_traj = GcsTrajectoryOptimization.UnwrapToContinuousTrajectory(
+            gcs_trajectory=traj,
+            continuous_revolute_joints=[0],
+            starting_rounds=[43],
+            tol=1e-8)
+        diff = (new_traj.value(new_traj.start_time())
+                - traj.value(traj.start_time())) % (2 * np.pi)
+        # Modulus may lead to the value being almost 2*pi, instead of zero.
+        if diff > np.pi:
+            diff -= 2 * np.pi
+        np.testing.assert_array_almost_equal(diff, np.zeros_like(diff))
 
     def test_get_continuous_revolute_joint_indices(self):
         plant = MultibodyPlant(0.0)

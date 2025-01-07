@@ -297,10 +297,10 @@ class TestToppra(unittest.TestCase):
 
     def test_all_constraints(self):
         plant = MultibodyPlant(0)
-        file_path = FindResourceOrThrow(
-            "drake/manipulation/models/iiwa_description/iiwa7/"
-            "iiwa7_no_collision.sdf")
-        iiwa_id, = Parser(plant).AddModels(file_path)
+        url = (
+            "package://drake_models/iiwa_description/sdf/"
+            + "iiwa7_no_collision.sdf")
+        iiwa_id, = Parser(plant).AddModels(url=url)
         plant.WeldFrames(plant.world_frame(),
                          plant.GetFrameByName("iiwa_link_0", iiwa_id))
         plant.Finalize()
@@ -400,5 +400,6 @@ class TestToppra(unittest.TestCase):
         toppra = Toppra(path=path, plant=plant, gridpoints=gridpoints)
 
         toppra.AddJointAccelerationLimit([-1.], [1.])
-        trajectory = toppra.SolvePathParameterization()
+        trajectory = toppra.SolvePathParameterization(
+            s_dot_start=0, s_dot_end=0)
         self.assertIsInstance(trajectory, PiecewisePolynomial)

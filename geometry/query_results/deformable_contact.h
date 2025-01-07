@@ -7,6 +7,7 @@
 
 #include "drake/geometry/geometry_ids.h"
 #include "drake/geometry/proximity/polygon_surface_mesh.h"
+#include "drake/math/rotation_matrix.h"
 #include "drake/multibody/contact_solvers/sap/partial_permutation.h"
 
 namespace drake {
@@ -42,12 +43,14 @@ namespace internal {
  contact point, marked with "X". */
 class ContactParticipation {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ContactParticipation)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ContactParticipation);
 
   /* Constructs a ContactParticipation for a deformable geometry with the
    given number of vertices in its mesh representation.
    @pre num_vertices > 0. */
   explicit ContactParticipation(int num_vertices);
+
+  ~ContactParticipation();
 
   /* Mark the given vertices as participating in contact.
    @pre each entry in `vertices` is non-negative and less than
@@ -122,12 +125,14 @@ class ContactParticipation {
  polygonal surface mesh. We call the centroids of the polygonal elements in this
  mesh "contact points". DeformableContactSurface stores this polygonal mesh as
  well as information about each contact point. We maintain the convention that
- geometry A is always deformable and geometry B may be deformable.
+ geometry A is always deformable and geometry B may be deformable. When both
+ geometries are deformable, we maintain the convention that the GeometryId of
+ geometry A is less than the GeometryId of geometry B.
  @tparam_double_only */
 template <typename T>
 class DeformableContactSurface {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(DeformableContactSurface)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(DeformableContactSurface);
 
   /* Constructs a deformable contact surface with the given data.
    @param[in] id_A
@@ -158,6 +163,7 @@ class DeformableContactSurface {
       Barycentric coordinates of centroids of contact polygons with respect to
       their containing tetrahedra in mesh B if B is deformable. std::nullopt
       otherwise.
+   @pre id_A < id_B if both geometries are deformable.
    @pre contact_mesh_W.num_faces() == signed_distances.size().
    @pre contact_mesh_W.num_faces() == contact_vertex_indexes_A.size().
    @pre contact_mesh_W.num_faces() == barycentric_coordinates_A.size().
@@ -172,8 +178,14 @@ class DeformableContactSurface {
       std::optional<std::vector<Vector4<int>>> contact_vertex_indexes_B,
       std::optional<std::vector<Vector4<T>>> barycentric_coordinates_B);
 
+  ~DeformableContactSurface();
+
+  /* Returns the GeometryId of geometry A. If `is_B_deformable()` is true, this
+   is guaranteed to be less than id_B(). */
   GeometryId id_A() const { return id_A_; }
 
+  /* Returns the GeometryId of geometry B. If `is_B_deformable()` is true, this
+   is guaranteed to be greater than id_A(). */
   GeometryId id_B() const { return id_B_; }
 
   const PolygonSurfaceMesh<T>& contact_mesh_W() const {
@@ -235,6 +247,14 @@ class DeformableContactSurface {
    `signed_distances()`.*/
   const std::vector<Vector3<T>>& nhats_W() const { return nhats_W_; }
 
+  /* Returns rotation matrices that transform the basis of frame W into the
+   basis of an arbitrary frame C. In this transformation, the z-axis of frame,
+   Cz, is aligned with the vector n̂. The vector n̂ represents the normal as
+   reported in `nhats_W()`. Cx and Cy are arbitrary but sufficient to form the
+   right-handed basis. The ordering of rotation matrices is the same as that in
+   `signed_distances()`. */
+  const std::vector<math::RotationMatrix<T>>& R_WCs() const { return R_WCs_; }
+
   bool is_B_deformable() const { return contact_vertex_indexes_B_.has_value(); }
 
  private:
@@ -249,6 +269,7 @@ class DeformableContactSurface {
   std::optional<std::vector<Vector4<int>>> contact_vertex_indexes_B_;
   std::optional<std::vector<Vector4<T>>> barycentric_coordinates_B_;
   std::vector<Vector3<T>> nhats_W_;
+  std::vector<math::RotationMatrix<T>> R_WCs_;
 };
 
 /* Data structure to hold contact information about all deformable geometries
@@ -260,9 +281,11 @@ class DeformableContactSurface {
 template <typename T>
 class DeformableContact {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(DeformableContact)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(DeformableContact);
 
   DeformableContact() = default;
+
+  ~DeformableContact();
 
   const std::vector<DeformableContactSurface<T>>& contact_surfaces() const {
     return contact_surfaces_;

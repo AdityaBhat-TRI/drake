@@ -45,6 +45,13 @@ using systems::UnrestrictedUpdateEvent;
 using systems::VectorSystem;
 using systems::WitnessFunction;
 
+// NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
+using namespace drake::systems;
+constexpr auto& doc = pydrake_doc.drake.systems;
+
+// TODO(jwnimmer-tri) Reformat this entire file to remove the unnecessary
+// indentation.
+
 class SystemBasePublic : public SystemBase {
  public:
   // This class is only used to expose some protected types.
@@ -290,21 +297,15 @@ struct Impl {
   template <typename... Args>
   using EventCallback = std::function<std::optional<EventStatus>(Args...)>;
 
-  static void DoScalarDependentDefinitions(py::module m) {
-    // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
-    using namespace drake::systems;
-    constexpr auto& doc = pydrake_doc.drake.systems;
-
+  static py::class_<System<T>, SystemBase, PySystem> DefineSystem(
+      py::module m) {
     // TODO(eric.cousineau): Show constructor, but somehow make sure `pybind11`
     // knows this is abstract?
     auto system_cls =
-        DefineTemplateClassWithDefault<System<T>, SystemBase, PySystem>(
-            m, "System", GetPyParam<T>(), doc.System.doc);
-    system_cls  // BR
-        .def(
-            "Accept",
-            [](const System<T>* self, PySystemVisitor* v) { self->Accept(v); },
-            py::arg("v"), doc.System.Accept.doc)
+        DefineTemplateClassWithDefault<System<T>, SystemBase, PySystem>(m,
+            "System", GetPyParam<T>(), doc.System.doc, std::nullopt,
+            py::dynamic_attr());
+    system_cls
         // Resource allocation and initialization.
         .def("AllocateContext", &System<T>::AllocateContext,
             doc.System.AllocateContext.doc)
@@ -398,6 +399,9 @@ struct Impl {
         .def("ExecuteInitializationEvents",
             &System<T>::ExecuteInitializationEvents, py::arg("context"),
             doc.System.ExecuteInitializationEvents.doc)
+        .def("ExecuteForcedEvents", &System<T>::ExecuteForcedEvents,
+            py::arg("context"), py::arg("publish") = true,
+            doc.System.ExecuteForcedEvents.doc)
         .def("GetUniquePeriodicDiscreteUpdateAttribute",
             &System<T>::GetUniquePeriodicDiscreteUpdateAttribute,
             doc.System.GetUniquePeriodicDiscreteUpdateAttribute.doc)
@@ -457,10 +461,11 @@ Note: The above is for the C++ documentation. For Python, use
             py::keep_alive<0, 2>(), doc.System.GetMyMutableContextFromRoot.doc)
         // Utility methods.
         .def("get_input_port",
-            overload_cast_explicit<const InputPort<T>&, int>(
+            overload_cast_explicit<const InputPort<T>&, int, bool>(
                 &System<T>::get_input_port),
             py_rvp::reference_internal, py::arg("port_index"),
-            doc.System.get_input_port.doc_1args)
+            py::arg("warn_deprecated") = true,
+            doc.System.get_input_port.doc_2args)
         .def("get_input_port",
             overload_cast_explicit<const InputPort<T>&>(
                 &System<T>::get_input_port),
@@ -471,10 +476,11 @@ Note: The above is for the C++ documentation. For Python, use
         .def("HasInputPort", &System<T>::HasInputPort, py::arg("port_name"),
             doc.System.HasInputPort.doc)
         .def("get_output_port",
-            overload_cast_explicit<const OutputPort<T>&, int>(
+            overload_cast_explicit<const OutputPort<T>&, int, bool>(
                 &System<T>::get_output_port),
             py_rvp::reference_internal, py::arg("port_index"),
-            doc.System.get_output_port.doc_1args)
+            py::arg("warn_deprecated") = true,
+            doc.System.get_output_port.doc_2args)
         .def("get_output_port",
             overload_cast_explicit<const OutputPort<T>&>(
                 &System<T>::get_output_port),
@@ -484,24 +490,6 @@ Note: The above is for the C++ documentation. For Python, use
             doc.System.GetOutputPort.doc)
         .def("HasOutputPort", &System<T>::HasOutputPort, py::arg("port_name"),
             doc.System.HasOutputPort.doc)
-        // Automatic differentiation.
-        .def(
-            "ToAutoDiffXd",
-            [](const System<T>& self) { return self.ToAutoDiffXd(); },
-            doc.System.ToAutoDiffXd.doc_0args)
-        .def("ToAutoDiffXdMaybe", &System<T>::ToAutoDiffXdMaybe,
-            doc.System.ToAutoDiffXdMaybe.doc)
-        // Symbolics
-        .def(
-            "ToSymbolic",
-            [](const System<T>& self) { return self.ToSymbolic(); },
-            doc.System.ToSymbolic.doc_0args)
-        .def("ToSymbolicMaybe", &System<T>::ToSymbolicMaybe,
-            doc.System.ToSymbolicMaybe.doc)
-        // Scalar type conversion utilities.
-        .def("FixInputPortsFrom", &System<T>::FixInputPortsFrom,
-            py::arg("other_system"), py::arg("other_context"),
-            py::arg("target_context"), doc.System.FixInputPortsFrom.doc)
         // Witness functions.
         .def(
             "GetWitnessFunctions",
@@ -541,30 +529,50 @@ Note: The above is for the C++ documentation. For Python, use
         .def("__deepcopy__", [](const System<T>* self, py::dict /* memo */) {
           return self->Clone();
         });
+    return system_cls;
+  }
 
-    // Out-of-order binding for Scalar type conversion by template parameter
-    // group.
-    auto def_to_scalar_type = [&system_cls, doc](auto dummy) {
+  template <typename PyClass>
+  static void DefineSystemScalarConversions(PyClass* system_cls) {
+    PyClass& cls = *system_cls;
+    cls  // BR
+        .def(
+            "ToAutoDiffXd",
+            [](const System<T>& self) { return self.ToAutoDiffXd(); },
+            doc.System.ToAutoDiffXd.doc_0args)
+        .def("ToAutoDiffXdMaybe", &System<T>::ToAutoDiffXdMaybe,
+            doc.System.ToAutoDiffXdMaybe.doc)
+        .def(
+            "ToSymbolic",
+            [](const System<T>& self) { return self.ToSymbolic(); },
+            doc.System.ToSymbolic.doc_0args)
+        .def("ToSymbolicMaybe", &System<T>::ToSymbolicMaybe,
+            doc.System.ToSymbolicMaybe.doc)
+        .def("FixInputPortsFrom", &System<T>::FixInputPortsFrom,
+            py::arg("other_system"), py::arg("other_context"),
+            py::arg("target_context"), doc.System.FixInputPortsFrom.doc);
+    auto def_to_scalar_type = [&cls](auto dummy) {
       using U = decltype(dummy);
       AddTemplateMethod(
-          system_cls, "ToScalarType",
+          cls, "ToScalarType",
           [](const System<T>& self) { return self.template ToScalarType<U>(); },
           GetPyParam<U>(), doc.System.ToScalarType.doc_0args);
     };
     type_visit(def_to_scalar_type, CommonScalarPack{});
 
-    auto def_to_scalar_type_maybe = [&system_cls, doc](auto dummy) {
+    auto def_to_scalar_type_maybe = [&cls](auto dummy) {
       using U = decltype(dummy);
-      AddTemplateMethod(system_cls, "ToScalarTypeMaybe",
+      AddTemplateMethod(cls, "ToScalarTypeMaybe",
           &System<T>::template ToScalarTypeMaybe<U>, GetPyParam<U>(),
           doc.System.ToScalarTypeMaybe.doc);
     };
     type_visit(def_to_scalar_type_maybe, CommonScalarPack{});
+  }
 
+  static void DefineLeafSystem(py::module m) {
     using AllocCallback = typename LeafOutputPort<T>::AllocCallback;
     using CalcCallback = typename LeafOutputPort<T>::CalcCallback;
     using CalcVectorCallback = typename LeafOutputPort<T>::CalcVectorCallback;
-
     auto leaf_system_cls =
         DefineTemplateClassWithDefault<LeafSystem<T>, PyLeafSystem, System<T>>(
             m, "LeafSystem", GetPyParam<T>(), doc.LeafSystem.doc);
@@ -603,7 +611,7 @@ Note: The above is for the C++ documentation. For Python, use
             py::arg("prerequisites_of_calc") =
                 std::set<DependencyTicket>{SystemBase::all_sources_ticket()},
             doc.LeafSystem.DeclareAbstractOutputPort
-                .doc_4args_name_alloc_function_calc_function_prerequisites_of_calc)
+                .doc_4args_name_alloc_calc_prerequisites_of_calc)
         .def(
             "DeclareVectorInputPort",
             [](PyLeafSystem* self, std::string name,
@@ -938,7 +946,9 @@ Note: The above is for the C++ documentation. For Python, use
             py::overload_cast<const AbstractValue&>(
                 &LeafSystemPublic::DeclareAbstractState),
             py::arg("model_value"), doc.LeafSystem.DeclareAbstractState.doc);
+  }
 
+  static void DefineDiagram(py::module m) {
     DefineTemplateClassWithDefault<Diagram<T>, PyDiagram, System<T>>(
         m, "Diagram", GetPyParam<T>(), doc.Diagram.doc)
         .def(py::init<>(), doc.Diagram.ctor.doc_0args)
@@ -1026,21 +1036,30 @@ Note: The above is for the C++ documentation. For Python, use
             doc.Diagram.GetSubsystemByName.doc)
         .def("GetSystems", &Diagram<T>::GetSystems, py_rvp::reference_internal,
             doc.Diagram.GetSystems.doc);
+  }
 
-    // N.B. This will effectively allow derived classes of `VectorSystem` to
-    // override `LeafSystem` methods, disrespecting `final`-ity.
-    // This could be changed (see https://stackoverflow.com/a/2425785), but meh,
-    // we're already abusing Python and C++ enough.
-    DefineTemplateClassWithDefault<VectorSystem<T>, PyVectorSystem,
-        LeafSystem<T>>(m, "VectorSystem", GetPyParam<T>(), doc.VectorSystem.doc)
-        .def(py::init([](int input_size, int output_size,
-                          std::optional<bool> direct_feedthrough) {
-          return new PyVectorSystem(
-              input_size, output_size, direct_feedthrough);
-        }),
-            py::arg("input_size"), py::arg("output_size"),
-            py::arg("direct_feedthrough") = std::nullopt,
-            doc.VectorSystem.ctor.doc_3args);
+  static void DefineVectorSystem(py::module m) {
+    {
+      // N.B. This will effectively allow derived classes of `VectorSystem` to
+      // override `LeafSystem` methods, disrespecting `final`-ity.
+      // This could be changed (see https://stackoverflow.com/a/2425785), but
+      // meh, we're already abusing Python and C++ enough.
+      auto cls = DefineTemplateClassWithDefault<VectorSystem<T>, PyVectorSystem,
+          LeafSystem<T>>(
+          m, "VectorSystem", GetPyParam<T>(), doc.VectorSystem.doc);
+      cls  // BR
+          .def(py::init([](int input_size, int output_size,
+                            std::optional<bool> direct_feedthrough) {
+            return new PyVectorSystem(
+                input_size, output_size, direct_feedthrough);
+          }),
+              py::arg("input_size"), py::arg("output_size"),
+              py::arg("direct_feedthrough"), doc.VectorSystem.ctor.doc_3args);
+    }
+  }
+
+  template <typename PyClass>
+  static void DefineSystemVisitor(py::module m, PyClass* system_cls) {
     // TODO(eric.cousineau): Bind virtual methods once we provide a function
     // wrapper to convert `Map<Derived>*` arguments.
     // N.B. This could be mitigated by using `EigenPtr` in public interfaces in
@@ -1053,6 +1072,11 @@ Note: The above is for the C++ documentation. For Python, use
             doc.SystemVisitor.VisitSystem.doc)
         .def("VisitDiagram", &SystemVisitor<T>::VisitDiagram,
             py::arg("diagram"), doc.SystemVisitor.VisitDiagram.doc);
+
+    system_cls->def(
+        "Accept",
+        [](const System<T>* self, SystemVisitor<T>* v) { self->Accept(v); },
+        py::arg("v"), doc.System.Accept.doc);
   }
 };
 
@@ -1062,10 +1086,6 @@ py::tuple GetPyParamList(type_pack<Packs...> = {}) {
 }
 
 void DoScalarIndependentDefinitions(py::module m) {
-  // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
-  using namespace drake::systems;
-  constexpr auto& doc = pydrake_doc.drake.systems;
-
   {
     using Class = SystemBase;
     constexpr auto& cls_doc = doc.SystemBase;
@@ -1203,10 +1223,12 @@ void DoScalarIndependentDefinitions(py::module m) {
             doc.SystemBase.DeclareCacheEntry
                 .doc_3args_description_value_producer_prerequisites_of_calc);
   }
+}
 
+template <typename PyClass>
+void DefineSystemScalarConverter(PyClass* cls) {
+  auto& converter = *cls;
   {
-    // System scalar conversion.
-    py::class_<SystemScalarConverter> converter(m, "SystemScalarConverter");
     converter  // BR
         .def(py::init())
         .def("__copy__",
@@ -1260,12 +1282,34 @@ void DoScalarIndependentDefinitions(py::module m) {
 void DefineFrameworkPySystems(py::module m) {
   DoScalarIndependentDefinitions(m);
 
+  // Declare (but don't define) to resolve a dependency cycle.
+  py::class_<SystemScalarConverter> cls_system_scalar_converter(
+      m, "SystemScalarConverter");
+  auto cls_system_double = Impl<double>::DefineSystem(m);
+  auto cls_system_autodiff = Impl<AutoDiffXd>::DefineSystem(m);
+  auto cls_system_expression = Impl<Expression>::DefineSystem(m);
+
   // Do templated instantiations of system types.
-  auto bind_common_scalar_types = [m](auto dummy) {
+  auto bind_common_scalar_types = [&](auto dummy) {
     using T = decltype(dummy);
-    Impl<T>::DoScalarDependentDefinitions(m);
+    py::class_<System<T>, SystemBase, typename Impl<T>::PySystem>* cls_system{};
+    if constexpr (std::is_same_v<T, double>) {
+      cls_system = &cls_system_double;
+    } else if constexpr (std::is_same_v<T, AutoDiffXd>) {
+      cls_system = &cls_system_autodiff;
+    } else {
+      static_assert(std::is_same_v<T, Expression>);
+      cls_system = &cls_system_expression;
+    }
+    Impl<T>::DefineSystemScalarConversions(cls_system);
+    Impl<T>::DefineLeafSystem(m);
+    Impl<T>::DefineDiagram(m);
+    Impl<T>::DefineVectorSystem(m);
+    Impl<T>::DefineSystemVisitor(m, cls_system);
   };
   type_visit(bind_common_scalar_types, CommonScalarPack{});
+
+  DefineSystemScalarConverter(&cls_system_scalar_converter);
 }
 
 }  // namespace pydrake

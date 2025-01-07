@@ -8,7 +8,6 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/eigen_types.h"
-#include "drake/common/find_resource.h"
 #include "drake/common/fmt_eigen.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
@@ -16,6 +15,7 @@
 #include "drake/math/rigid_transform.h"
 #include "drake/multibody/parsing/parser.h"
 #include "drake/solvers/constraint.h"
+#include "drake/solvers/osqp_solver.h"
 
 namespace drake {
 namespace multibody {
@@ -39,10 +39,8 @@ class DifferentialInverseKinematicsTest : public ::testing::Test {
     // Load the IIWA SDF, welding link_0 to the world if floating==false.
     plant_ = std::make_unique<MultibodyPlant<double>>(0.0);
     multibody::Parser parser(plant_.get());
-    const std::string filename = FindResourceOrThrow(
-        "drake/manipulation/models/"
-        "iiwa_description/sdf/iiwa14_no_collision.sdf");
-    parser.AddModels(filename);
+    parser.AddModelsFromUrl(
+        "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf");
     if (!floating) {
       math::RigidTransform<double> X_WA =
        math::RigidTransform<double>(
@@ -178,6 +176,14 @@ TEST_F(DifferentialInverseKinematicsTest, PositiveTest) {
   result = DoDiffIKForSpatialVelocity(V_WE_W);
   drake::log()->info("result.status = {}", result.status);
   CheckPositiveResult(V_WE_W, result);
+
+  // Setting an impossibly tight solver option nixes the solution. This proves
+  // that we're passing through the custom solver options correctly.
+  params_->get_mutable_solver_options().SetOption(solvers::OsqpSolver::id(),
+                                                  "max_iter", 0);
+  result = DoDiffIKForSpatialVelocity(V_WE_W);
+  EXPECT_EQ(result.status,
+            DifferentialInverseKinematicsStatus::kNoSolutionFound);
 }
 
 TEST_F(DifferentialInverseKinematicsTest, OverConstrainedTest) {
@@ -441,10 +447,9 @@ GTEST_TEST(DifferentialInverseKinematicsParametersTest, TestMutators) {
 GTEST_TEST(AdditionalDifferentialInverseKinematicsTests, TestLinearObjective) {
   MultibodyPlant<double> plant(0.0);
   multibody::Parser parser(&plant);
-  const std::string filename = FindResourceOrThrow(
-      "drake/manipulation/models/iiwa_description/urdf/"
+  parser.AddModelsFromUrl(
+      "package://drake_models/iiwa_description/urdf/"
       "planar_iiwa14_spheres_dense_elbow_collision.urdf");
-  parser.AddModels(filename);
   plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("iiwa_link_0"));
   plant.Finalize();
   const multibody::Frame<double>& frame_7 = plant.GetFrameByName("iiwa_link_7");

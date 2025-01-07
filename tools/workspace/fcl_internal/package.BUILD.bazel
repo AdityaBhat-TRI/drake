@@ -1,10 +1,10 @@
 # -*- bazel -*-
 
+load("@drake//tools/install:install.bzl", "install")
 load(
     "@drake//tools/workspace:cmake_configure_file.bzl",
     "cmake_configure_file",
 )
-load("@drake//tools/install:install.bzl", "install")
 load(
     "@drake//tools/workspace:generate_export_header.bzl",
     "generate_export_header",
@@ -123,7 +123,10 @@ cc_library_vendored(
         x.replace("include/fcl/", "drake_hdr/fcl/")
         for x in _HDRS
     ],
-    copts = ["-fvisibility=hidden"],
+    copts = [
+        "-fvisibility=hidden",
+        "-w",
+    ],
     defines = [
         "FCL_STATIC_DEFINE",
     ],

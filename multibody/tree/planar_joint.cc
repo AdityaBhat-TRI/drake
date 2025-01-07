@@ -8,6 +8,9 @@ namespace drake {
 namespace multibody {
 
 template <typename T>
+PlanarJoint<T>::~PlanarJoint() = default;
+
+template <typename T>
 const std::string& PlanarJoint<T>::type_name() const {
   static const never_destroyed<std::string> name{kTypeName};
   return name.access();
@@ -60,10 +63,14 @@ std::unique_ptr<Joint<symbolic::Expression>> PlanarJoint<T>::DoCloneToScalar(
 // in the header file.
 template <typename T>
 std::unique_ptr<typename Joint<T>::BluePrint>
-PlanarJoint<T>::MakeImplementationBlueprint() const {
+PlanarJoint<T>::MakeImplementationBlueprint(
+    const internal::SpanningForest::Mobod& mobod) const {
   auto blue_print = std::make_unique<typename Joint<T>::BluePrint>();
+  const auto [inboard_frame, outboard_frame] =
+      this->tree_frames(mobod.is_reversed());
+  // TODO(sherm1) The mobilizer needs to be reversed, not just the frames.
   auto planar_mobilizer = std::make_unique<internal::PlanarMobilizer<T>>(
-      this->frame_on_parent(), this->frame_on_child());
+      mobod, *inboard_frame, *outboard_frame);
   planar_mobilizer->set_default_position(this->default_positions());
   blue_print->mobilizer = std::move(planar_mobilizer);
   return blue_print;
@@ -73,4 +80,4 @@ PlanarJoint<T>::MakeImplementationBlueprint() const {
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::PlanarJoint)
+    class ::drake::multibody::PlanarJoint);

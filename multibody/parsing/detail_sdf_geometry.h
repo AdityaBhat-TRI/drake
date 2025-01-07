@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include <sdf/Collision.hh>
 #include <sdf/Geometry.hh>
@@ -21,6 +22,12 @@ namespace drake {
 namespace multibody {
 namespace internal {
 
+// We convert <drake:visual> to <visual> but want to record its unique origin.
+// We do so by adding an attribute to the <visual>. If present, it came from a
+// drake-namespaced element, originally. (The value of the attribute is
+// irrelevant.)
+constexpr char kIsDrakeNamespaceAttr[] = "drake-namespaced";
+
 /* Used for resolving URIs / filenames.  */
 using ResolveFilename = std::function<std::string (
     const SDFormatDiagnostic&, std::string)>;
@@ -28,27 +35,38 @@ using ResolveFilename = std::function<std::string (
 /* Given an sdf::Geometry object representing a <geometry> element from an SDF
  file, this method makes a new drake::geometry::Shape object from this
  specification.
- If no recognizable geometry is specified, nullptr is returned. If the geometry
- is recognized, but malformed, emits an error. When the error policy is set to
- not throw it returns std::nullopt. */
-std::optional<std::unique_ptr<geometry::Shape>> MakeShapeFromSdfGeometry(
-    const SDFormatDiagnostic& diagnostic,
-    const sdf::Geometry& sdf_geometry,
+ If no recognizable geometry is specified or the geometry is recognized but
+ malformed, nullptr is returned. In the case of a malformed specification, an
+ error is also emitted on `diagnostic`. */
+std::unique_ptr<geometry::Shape> MakeShapeFromSdfGeometry(
+    const SDFormatDiagnostic& diagnostic, const sdf::Geometry& sdf_geometry,
     ResolveFilename resolve_filename);
 
 /* Given an sdf::Visual object representing a <visual> element from an SDF
  file, this method makes a new drake::geometry::GeometryInstance object from
- this specification at a pose `X_LG` relatve to its parent link.
- This method returns nullptr when the given SDF specification corresponds
- to an uninterpreted geometry type:
- - `sdf::GeometryType::EMPTY` (`<empty/>` SDF tag.)
- - `sdf::GeometryType::HEIGHTMAP` (`<heightmap/>` SDF tag.)
- If the geometry is malformed, emits an error. When the error policy is not
- set to throw it returns an std::nullopt.
+ this specification at a pose `X_LG` relative to its parent link.
+
+ This method returns null when:
+   1. the given SDF specification corresponds to an uninterpreted geometry type:
+      - `sdf::GeometryType::EMPTY` (`<empty/>` SDF tag.)
+      - `sdf::GeometryType::HEIGHTMAP` (`<heightmap/>` SDF tag.)
+   2. the <visual> has had both of its Drake roles disabled.
+   3. the <visual> specification was in some way malformed.
+
+ In the case of a malformed specification, an error is also emitted to
+ `diagnostic`.
 
  <!-- TODO(SeanCurtis-TRI): Ultimately, a module for what we parse should be
   written outside of this _internal_ namespace. This should go there and
   merely reference it.  -->
+
+ <h2>Controlling Drake visual roles</h2>
+
+ SDFormat <visual> tags get illustration and perception roles by default. We
+ can opt out of those roles and even use different geometries for different
+ roles. See, @ref tag_drake_perception_properties,
+ @ref tag_drake_illustration_properties, and @ref tag_drake_visual in
+ parsing_doxygen.h for more details.
 
  <h2>Targeting Renderers</h2>
 
@@ -74,11 +92,16 @@ std::optional<std::unique_ptr<geometry::Shape>> MakeShapeFromSdfGeometry(
 
  This feature is one way to provide multiple visual representations of a body.
  */
-std::optional<std::unique_ptr<geometry::GeometryInstance>>
-    MakeGeometryInstanceFromSdfVisual(
-        const SDFormatDiagnostic& diagnostic,
-        const sdf::Visual& sdf_visual, ResolveFilename resolve_filename,
-        const math::RigidTransformd& X_LG);
+std::unique_ptr<geometry::GeometryInstance> MakeGeometryInstanceFromSdfVisual(
+    const SDFormatDiagnostic& diagnostic, const sdf::Visual& sdf_visual,
+    ResolveFilename resolve_filename, const math::RigidTransformd& X_LG);
+
+/* The visual properties implied by the <visual> tag. It is possible that zero,
+ one, or two sets of properties are defined. */
+struct VisualProperties {
+  std::optional<geometry::IllustrationProperties> illustration;
+  std::optional<geometry::PerceptionProperties> perception;
+};
 
 /* Extracts the material properties from the given sdf::Visual object.
  The sdf::Visual object represents a corresponding <visual> tag from an SDF
@@ -130,10 +153,9 @@ std::optional<std::unique_ptr<geometry::GeometryInstance>>
  property tags, the property set will be empty. If the material is malformed
  an error will be emitted. If the error policy is not set to throw, an
  std::nullopt will be returned. */
-std::optional<geometry::IllustrationProperties>
-    MakeVisualPropertiesFromSdfVisual(
-        const SDFormatDiagnostic& diagnostic,
-        const sdf::Visual& sdf_visual, ResolveFilename resolve_filename);
+VisualProperties MakeVisualPropertiesFromSdfVisual(
+    const SDFormatDiagnostic& diagnostic, const sdf::Visual& sdf_visual,
+    ResolveFilename resolve_filename);
 
 /* Computes the pose `X_LC` of frame C (the "canonical frame" of the geometry)
  relative to the link L containing the collision, given an `sdf_collision`
@@ -160,14 +182,14 @@ math::RigidTransformd MakeGeometryPoseFromSdfCollision(
  If the collision element is malformed it emits an error. If the error
  policy is set to not throw an std::nullopt is returned instead.
 
- Mapping from SDF tag to geometry property. See
-  @ref YET_TO_BE_WRITTEN_HYDROELASTIC_GEOMETRY_MODULE for details on the
- semantics of these properties.
+ Mapping from SDF tag to geometry property. See @ref hydroelastic_user_guide
+ for details on the semantics of these properties.
 
  | Tag                              | Group        | Property                  | Notes                                                                                                                            |
  | :------------------------------: | :----------: | :-----------------------: | :------------------------------------------------------------------------------------------------------------------------------: |
  | drake:mesh_resolution_hint       | hydroelastic | resolution_hint           | Required for shapes that require tessellation to support hydroelastic contact.                                                   |
  | drake:hydroelastic_modulus       | hydroelastic | hydroelastic_modulus      | Finite positive value. Required for compliant hydroelastic representations.                                                      |
+ | drake:hydroelastic_margin        | hydroelastic | margin                    | Finite nonnegative value. Optional.
  | drake:hunt_crossley_dissipation  | material     | hunt_crossley_dissipation |                                                                                                                                  |
  | drake:relaxation_time            | material     | relaxation_time           | Required when using a linear model of dissipation, for instance with the SAP solver.                                             |
  | drake:mu_dynamic                 | material     | coulomb_friction          | See note below on friction.                                                                                                      |

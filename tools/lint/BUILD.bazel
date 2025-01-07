@@ -1,5 +1,3 @@
-package(default_visibility = ["//visibility:public"])
-
 load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/lint:python_lint.bzl",
@@ -12,22 +10,14 @@ load(
     "drake_py_library",
     "drake_py_unittest",
 )
+load("//tools/skylark:drake_sh.bzl", "drake_sh_test")
 
-py_library(
+package(default_visibility = ["//visibility:public"])
+
+drake_py_library(
     name = "module_py",
     srcs = ["__init__.py"],
     deps = ["//tools:module_py"],
-)
-
-# TODO(jwnimmer-tri) This probably deserves to live in drake/common, since it
-# should probably be widely used, but we'll wait until we have more evidence
-# before promoting it.
-drake_py_library(
-    name = "find_data",
-    srcs = ["find_data.py"],
-    deps = [
-        ":module_py",
-    ],
 )
 
 drake_py_library(
@@ -48,9 +38,9 @@ drake_py_binary(
         "@buildifier",
     ],
     deps = [
-        ":find_data",
         ":module_py",
         ":util",
+        "@rules_python//python/runfiles",
     ],
 )
 
@@ -139,12 +129,6 @@ drake_py_unittest(
 )
 
 drake_py_unittest(
-    name = "find_data_test",
-    data = ["test/find_data_test.txt"],
-    deps = [":find_data"],
-)
-
-drake_py_unittest(
     name = "util_test",
     tags = [
         # This test's pass/fail result depends on the presence of files in the
@@ -163,9 +147,8 @@ drake_py_unittest(
     deps = [":formatter"],
 )
 
-sh_test(
+drake_sh_test(
     name = "clang_format_includes_test",
-    size = "small",
     srcs = ["test/clang_format_includes_test.sh"],
     data = [
         ":clang-format-includes",

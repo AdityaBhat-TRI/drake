@@ -9,32 +9,38 @@ namespace drake {
 namespace multibody {
 
 template <typename T>
-PrismaticJoint<T>::PrismaticJoint(
-    const std::string& name, const Frame<T>& frame_on_parent,
-    const Frame<T>& frame_on_child, const Vector3<double>& axis,
-    double pos_lower_limit, double pos_upper_limit, double damping)
-    : Joint<T>(name, frame_on_parent, frame_on_child,
-               VectorX<double>::Constant(1, damping),
-               VectorX<double>::Constant(1, pos_lower_limit),
-               VectorX<double>::Constant(1, pos_upper_limit),
-               VectorX<double>::Constant(
-                   1, -std::numeric_limits<double>::infinity()),
-               VectorX<double>::Constant(
-                   1, std::numeric_limits<double>::infinity()),
-               VectorX<double>::Constant(
-                   1, -std::numeric_limits<double>::infinity()),
-               VectorX<double>::Constant(
-                   1, std::numeric_limits<double>::infinity())) {
+PrismaticJoint<T>::PrismaticJoint(const std::string& name,
+                                  const Frame<T>& frame_on_parent,
+                                  const Frame<T>& frame_on_child,
+                                  const Vector3<double>& axis,
+                                  double pos_lower_limit,
+                                  double pos_upper_limit, double damping)
+    : Joint<T>(
+          name, frame_on_parent, frame_on_child,
+          VectorX<double>::Constant(1, damping),
+          VectorX<double>::Constant(1, pos_lower_limit),
+          VectorX<double>::Constant(1, pos_upper_limit),
+          VectorX<double>::Constant(1,
+                                    -std::numeric_limits<double>::infinity()),
+          VectorX<double>::Constant(1, std::numeric_limits<double>::infinity()),
+          VectorX<double>::Constant(1,
+                                    -std::numeric_limits<double>::infinity()),
+          VectorX<double>::Constant(1,
+                                    std::numeric_limits<double>::infinity())) {
   const double kEpsilon = std::sqrt(std::numeric_limits<double>::epsilon());
   if (axis.isZero(kEpsilon)) {
-    throw std::logic_error("Prismatic joint axis vector must have nonzero "
-                           "length.");
+    throw std::logic_error(
+        "Prismatic joint axis vector must have nonzero "
+        "length.");
   }
   if (damping < 0) {
     throw std::logic_error("Prismatic joint damping must be nonnegative.");
   }
   axis_ = axis.normalized();
 }
+
+template <typename T>
+PrismaticJoint<T>::~PrismaticJoint() = default;
 
 template <typename T>
 const std::string& PrismaticJoint<T>::type_name() const {
@@ -87,4 +93,4 @@ std::unique_ptr<Joint<symbolic::Expression>> PrismaticJoint<T>::DoCloneToScalar(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::PrismaticJoint)
+    class ::drake::multibody::PrismaticJoint);

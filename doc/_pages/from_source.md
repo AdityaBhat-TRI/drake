@@ -11,13 +11,15 @@ officially supports:
      CMakeLists.txt. -->
 <!-- The minimum compiler versions should match those listed in both the root
      CMakeLists.txt and tools/workspace/cc/repository.bzl. -->
+<!-- The minimum Python version(s) should match those listed in both the root
+     CMakeLists.txt and setup/python/pyproject.toml. -->
 
-| Operating System ⁽¹⁾               | Architecture | Python ⁽²⁾ | Bazel | CMake | C/C++ Compiler ⁽³⁾           | Java                          |
-|------------------------------------|--------------|------------|-------|-------|------------------------------|-------------------------------|
-| Ubuntu 22.04 LTS (Jammy Jellyfish) | x86_64       | 3.10       | 7.0   | 3.22  | GCC 11 (default) or Clang 14 | OpenJDK 11                    |
-| macOS Monterey (12)                | x86_64       | 3.12       | 7.0   | 3.25  | Apple LLVM 14 (Xcode 14)     | AdoptOpenJDK 16 (HotSpot JVM) |
-| macOS Ventura (13)                 | arm64        | 3.12       | 7.0   | 3.26  | Apple LLVM 14 (Xcode 14)     | AdoptOpenJDK 16 (HotSpot JVM) |
-| macOS Sonoma (14)                  | arm64        | 3.12       | 7.0   | 3.28  | Apple LLVM 15 (Xcode 15)     | AdoptOpenJDK 16 (HotSpot JVM) |
+| Operating System ⁽¹⁾               | Architecture | Python ⁽²⁾ | Bazel | CMake | C/C++ Compiler ⁽³⁾           | Java          |
+|------------------------------------|--------------|------------|-------|-------|------------------------------|------------|
+| Ubuntu 22.04 LTS (Jammy Jellyfish) | x86_64       | 3.10       | 8.0   | 3.22  | GCC 11 (default) or Clang 15 | OpenJDK 11 |
+| Ubuntu 24.04 LTS (Noble Numbat)    | x86_64       | 3.12       | 8.0   | 3.28  | GCC 13 (default) or Clang 15 | OpenJDK 21 |
+| macOS Sonoma (14)                  | arm64        | 3.12       | 8.0   | 3.31  | Apple LLVM 16 (Xcode 16)     | OpenJDK 23 |
+| macOS Sequoia (15)                 | arm64        | 3.12       | 8.0   | 3.31  | Apple LLVM 16 (Xcode 16)     | OpenJDK 23 |
 
 "Official support" means that we have Continuous Integration test coverage to
 notice regressions, so if it doesn't work for you then please file a bug report.
@@ -37,7 +39,7 @@ setup steps.
 
 ⁽²⁾ CPython is the only Python implementation supported.
 
-⁽³⁾ Drake requires a compiler running in C++17 or C++20 mode.
+⁽³⁾ Drake requires a compiler running in C++20 (or greater) mode.
 
 # Getting Drake
 
@@ -152,6 +154,13 @@ You will also need to have your ``PYTHONPATH`` configured correctly.
 ```bash
 cd drake-build
 export PYTHONPATH=${PWD}/install/lib/python3.10/site-packages:${PYTHONPATH}
+```
+
+*Ubuntu 24.04 (Jammy):*
+
+```bash
+cd drake-build
+export PYTHONPATH=${PWD}/install/lib/python3.12/site-packages:${PYTHONPATH}
 ```
 
 *macOS:*

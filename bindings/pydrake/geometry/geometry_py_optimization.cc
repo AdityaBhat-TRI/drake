@@ -4,7 +4,6 @@
 
 #include "drake/bindings/pydrake/common/cpp_template_pybind.h"
 #include "drake/bindings/pydrake/common/default_scalars_pybind.h"
-#include "drake/bindings/pydrake/common/deprecation_pybind.h"
 #include "drake/bindings/pydrake/common/identifier_pybind.h"
 #include "drake/bindings/pydrake/common/serialize_pybind.h"
 #include "drake/bindings/pydrake/common/sorted_pair_pybind.h"
@@ -19,6 +18,7 @@
 #include "drake/geometry/optimization/affine_subspace.h"
 #include "drake/geometry/optimization/c_iris_collision_geometry.h"
 #include "drake/geometry/optimization/cartesian_product.h"
+#include "drake/geometry/optimization/convex_hull.h"
 #include "drake/geometry/optimization/cspace_free_polytope.h"
 #include "drake/geometry/optimization/cspace_free_polytope_base.h"
 #include "drake/geometry/optimization/cspace_free_structs.h"
@@ -28,6 +28,7 @@
 #include "drake/geometry/optimization/hpolyhedron.h"
 #include "drake/geometry/optimization/hyperellipsoid.h"
 #include "drake/geometry/optimization/hyperrectangle.h"
+#include "drake/geometry/optimization/implicit_graph_of_convex_sets.h"
 #include "drake/geometry/optimization/intersection.h"
 #include "drake/geometry/optimization/iris.h"
 #include "drake/geometry/optimization/minkowski_sum.h"
@@ -37,21 +38,34 @@
 
 namespace drake {
 namespace pydrake {
+namespace {
 
-// CSpaceSeparatingPlane, CIrisSeparatingPlane
-template <typename T>
-void DoSeparatingPlaneDeclaration(py::module m, T) {
-  constexpr auto& doc = pydrake_doc.drake.geometry.optimization;
-  py::tuple param = GetPyParam<T>();
-  using Class = geometry::optimization::CSpaceSeparatingPlane<T>;
-  constexpr auto& base_cls_doc = doc.CSpaceSeparatingPlane;
-  {
-    auto cls =
-        DefineTemplateClassWithDefault<Class>(
-            m, "CSpaceSeparatingPlane", param, base_cls_doc.doc)
-            // Use py_rvp::copy here because numpy.ndarray with dtype=object
-            // arrays must be copied, and cannot be referenced.
-            .def_readonly("a", &Class::a, py_rvp::copy, base_cls_doc.a.doc)
+// NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
+using namespace drake::geometry;
+// NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
+using namespace drake::geometry::optimization;
+constexpr auto& doc = pydrake_doc.drake.geometry.optimization;
+
+// Definitions for cspace_separating_plane.h.
+void DefineCspaceSeparatingPlane(py::module m) {
+  py::enum_<SeparatingPlaneOrder>(
+      m, "SeparatingPlaneOrder", doc.SeparatingPlaneOrder.doc)
+      .value("kAffine", SeparatingPlaneOrder::kAffine,
+          doc.SeparatingPlaneOrder.kAffine.doc);
+
+  type_visit(
+      [m]<typename T>(const T& /* unused */) {
+        py::tuple param = GetPyParam<T>();
+        using Class = geometry::optimization::CSpaceSeparatingPlane<T>;
+        constexpr auto& base_cls_doc = doc.CSpaceSeparatingPlane;
+        auto cls = DefineTemplateClassWithDefault<Class>(
+            m, "CSpaceSeparatingPlane", param, base_cls_doc.doc);
+        cls  // BR
+            .def_readonly("a", &Class::a,
+                // Use py_rvp::copy here because numpy.ndarray with
+                // dtype=object arrays must be copied, and cannot be
+                // referenced.
+                py_rvp::copy, base_cls_doc.a.doc)
             .def_readonly("b", &Class::b, base_cls_doc.b.doc)
             .def_readonly("positive_side_geometry",
                 &Class::positive_side_geometry,
@@ -62,27 +76,18 @@ void DoSeparatingPlaneDeclaration(py::module m, T) {
             .def_readonly("expressed_body", &Class::expressed_body,
                 base_cls_doc.expressed_body.doc)
             .def_readonly("plane_degree", &Class::plane_degree)
-            // Use py_rvp::copy here because numpy.ndarray with dtype=object
-            // arrays must be copied, and cannot be referenced.
             .def_readonly("decision_variables", &Class::decision_variables,
+                // Use py_rvp::copy here because numpy.ndarray with
+                // dtype=object arrays must be copied, and cannot be
+                // referenced.
                 py_rvp::copy, base_cls_doc.a.doc);
-    DefCopyAndDeepCopy(&cls);
-    AddValueInstantiation<Class>(m);
-  }
+        DefCopyAndDeepCopy(&cls);
+        AddValueInstantiation<Class>(m);
+      },
+      type_pack<double, symbolic::Variable>());
 }
 
-void DefineGeometryOptimization(py::module m) {
-  // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
-  using namespace drake;
-  // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
-  using namespace drake::geometry;
-  // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
-  using namespace drake::geometry::optimization;
-  m.doc() = "Local bindings for `drake::geometry::optimization`";
-  constexpr auto& doc = pydrake_doc.drake.geometry.optimization;
-
-  py::module::import("pydrake.solvers");
-
+void DefineConvexSetBaseClassAndSubclasses(py::module m) {
   // SampledVolume. This struct must be declared before ConvexSet as methods in
   // ConvexSet depend on this struct.
   {
@@ -103,7 +108,9 @@ void DefineGeometryOptimization(py::module m) {
             cls_doc.ambient_dimension.doc)
         .def("IntersectsWith", &ConvexSet::IntersectsWith, py::arg("other"),
             cls_doc.IntersectsWith.doc)
-        .def("IsBounded", &ConvexSet::IsBounded, cls_doc.IsBounded.doc)
+        .def("IsBounded", &ConvexSet::IsBounded,
+            py::arg("parallelism") = Parallelism::None(),
+            py::call_guard<py::gil_scoped_release>(), cls_doc.IsBounded.doc)
         .def("IsEmpty", &ConvexSet::IsEmpty, cls_doc.IsEmpty.doc)
         .def("MaybeGetPoint", &ConvexSet::MaybeGetPoint,
             cls_doc.MaybeGetPoint.doc)
@@ -141,13 +148,20 @@ void DefineGeometryOptimization(py::module m) {
         .def("CalcVolume", &ConvexSet::CalcVolume, cls_doc.CalcVolume.doc)
         .def("CalcVolumeViaSampling", &ConvexSet::CalcVolumeViaSampling,
             py::arg("generator"), py::arg("desired_rel_accuracy") = 1e-2,
-            py::arg("max_num_samples") = 1e4,
-            cls_doc.CalcVolumeViaSampling.doc);
+            py::arg("max_num_samples") = 1e4, cls_doc.CalcVolumeViaSampling.doc)
+        .def("Projection", &ConvexSet::Projection, py::arg("points"),
+            cls_doc.Projection.doc);
   }
-  // There is a dependency cycle between Hyperellipsoid and AffineBall, so we
+
+  // There is a dependency cycle between Hyperellipsoid <=> AffineBall, so we
   // need to "forward declare" the Hyperellipsoid class here.
   py::class_<Hyperellipsoid, ConvexSet> hyperellipsoid_cls(
       m, "Hyperellipsoid", doc.Hyperellipsoid.doc);
+
+  // There is a dependency cycle between VPolytope <=> HPolyhedron, so we
+  // need to "forward declare" the VPolytope class here.
+  py::class_<VPolytope, ConvexSet> vpolytope_cls(
+      m, "VPolytope", doc.VPolytope.doc);
 
   // AffineBall
   {
@@ -172,7 +186,11 @@ void DefineGeometryOptimization(py::module m) {
         .def_static("MakeHypersphere", &AffineBall::MakeHypersphere,
             py::arg("radius"), py::arg("center"), cls_doc.MakeHypersphere.doc)
         .def_static("MakeUnitBall", &AffineBall::MakeUnitBall, py::arg("dim"),
-            cls_doc.MakeUnitBall.doc);
+            cls_doc.MakeUnitBall.doc)
+        .def_static("MakeAffineBallFromLineSegment",
+            &AffineBall::MakeAffineBallFromLineSegment, py::arg("x_1"),
+            py::arg("x_2"), py::arg("epsilon") = 1e-3,
+            cls_doc.MakeAffineBallFromLineSegment.doc);
     DefClone(&cls);
   }
 
@@ -194,8 +212,6 @@ void DefineGeometryOptimization(py::module m) {
             py_rvp::reference_internal, cls_doc.translation.doc)
         .def("AffineDimension", &AffineSubspace::AffineDimension,
             cls_doc.AffineDimension.doc)
-        .def("Project", &AffineSubspace::Project, py::arg("x"),
-            cls_doc.Project.doc)
         .def("ToLocalCoordinates", &AffineSubspace::ToLocalCoordinates,
             py::arg("x"), cls_doc.ToLocalCoordinates.doc)
         .def("ToGlobalCoordinates", &AffineSubspace::ToGlobalCoordinates,
@@ -237,7 +253,50 @@ void DefineGeometryOptimization(py::module m) {
         .def("num_factors", &CartesianProduct::num_factors,
             cls_doc.num_factors.doc)
         .def("factor", &CartesianProduct::factor, py_rvp::reference_internal,
-            py::arg("index"), cls_doc.factor.doc);
+            py::arg("index"), cls_doc.factor.doc)
+        .def("A", &CartesianProduct::A, cls_doc.A.doc)
+        .def("b", &CartesianProduct::b, cls_doc.b.doc);
+  }
+
+  // ConvexHull
+  {
+    const auto& cls_doc = doc.ConvexHull;
+    py::class_<ConvexHull, ConvexSet>(m, "ConvexHull", cls_doc.doc)
+        .def(py::init([](const std::vector<ConvexSet*>& sets,
+                          const bool remove_empty_sets) {
+          return std::make_unique<ConvexHull>(
+              CloneConvexSets(sets), remove_empty_sets);
+        }),
+            py::arg("sets"), cls_doc.ctor.doc,
+            py::arg("remove_empty_sets") = true)
+        .def(
+            "sets",
+            [](ConvexHull* self) {
+              std::vector<const geometry::optimization::ConvexSet*> sets;
+              for (auto& set : self->sets()) {
+                sets.push_back(set.get());
+              }
+              py::object self_py = py::cast(self, py_rvp::reference);
+              return py::cast(sets, py_rvp::reference_internal, self_py);
+            },
+            cls_doc.sets.doc)
+        .def(
+            "participating_sets",
+            [](ConvexHull* self) {
+              std::vector<const geometry::optimization::ConvexSet*> sets;
+              for (auto& set : self->participating_sets()) {
+                sets.push_back(set.get());
+              }
+              py::object self_py = py::cast(self, py_rvp::reference);
+              return py::cast(sets, py_rvp::reference_internal, self_py);
+            },
+            cls_doc.sets.doc)
+        .def("empty_sets_removed", &ConvexHull::empty_sets_removed,
+            cls_doc.empty_sets_removed.doc)
+        .def("element", &ConvexHull::element, py_rvp::reference_internal,
+            py::arg("index"), cls_doc.element.doc)
+        .def("num_elements", &ConvexHull::num_elements,
+            cls_doc.num_elements.doc);
   }
 
   // HPolyhedron
@@ -268,6 +327,20 @@ void DefineGeometryOptimization(py::module m) {
             py::arg("tol") = 1E-9, cls_doc.ReduceInequalities.doc)
         .def("FindRedundant", &HPolyhedron::FindRedundant,
             py::arg("tol") = 1E-9, cls_doc.FindRedundant.doc)
+        .def("SimplifyByIncrementalFaceTranslation",
+            &HPolyhedron::SimplifyByIncrementalFaceTranslation,
+            py::arg("min_volume_ratio") = 0.1,
+            py::arg("do_affine_transformation") = true,
+            py::arg("max_iterations") = 10,
+            py::arg("points_to_contain") = Eigen::MatrixXd(),
+            py::arg("intersecting_polytopes") = std::vector<HPolyhedron>(),
+            py::arg("keep_whole_intersection") = false,
+            py::arg("intersection_padding") = 1e-4, py::arg("random_seed") = 0,
+            cls_doc.SimplifyByIncrementalFaceTranslation.doc)
+        .def("MaximumVolumeInscribedAffineTransformation",
+            &HPolyhedron::MaximumVolumeInscribedAffineTransformation,
+            py::arg("circumbody"),
+            cls_doc.MaximumVolumeInscribedAffineTransformation.doc)
         .def("MaximumVolumeInscribedEllipsoid",
             &HPolyhedron::MaximumVolumeInscribedEllipsoid,
             cls_doc.MaximumVolumeInscribedEllipsoid.doc)
@@ -283,15 +356,19 @@ void DefineGeometryOptimization(py::module m) {
             py::arg("other"), cls_doc.PontryaginDifference.doc)
         .def("UniformSample",
             overload_cast_explicit<Eigen::VectorXd, RandomGenerator*,
-                const Eigen::Ref<const Eigen::VectorXd>&, int>(
-                &HPolyhedron::UniformSample),
+                const Eigen::Ref<const Eigen::VectorXd>&, int,
+                const std::optional<Eigen::Ref<const Eigen::MatrixXd>>&,
+                double>(&HPolyhedron::UniformSample),
             py::arg("generator"), py::arg("previous_sample"),
-            py::arg("mixing_steps") = 10, cls_doc.UniformSample.doc_3args)
+            py::arg("mixing_steps") = 10, py::arg("subspace") = std::nullopt,
+            py::arg("tol") = 1e-8, cls_doc.UniformSample.doc_5args)
         .def("UniformSample",
-            overload_cast_explicit<Eigen::VectorXd, RandomGenerator*, int>(
-                &HPolyhedron::UniformSample),
+            overload_cast_explicit<Eigen::VectorXd, RandomGenerator*, int,
+                const std::optional<Eigen::Ref<const Eigen::MatrixXd>>&,
+                double>(&HPolyhedron::UniformSample),
             py::arg("generator"), py::arg("mixing_steps") = 10,
-            cls_doc.UniformSample.doc_2args)
+            py::arg("subspace") = std::nullopt, py::arg("tol") = 1e-8,
+            cls_doc.UniformSample.doc_4args)
         .def_static("MakeBox", &HPolyhedron::MakeBox, py::arg("lb"),
             py::arg("ub"), cls_doc.MakeBox.doc)
         .def_static("MakeUnitBox", &HPolyhedron::MakeUnitBox, py::arg("dim"),
@@ -441,19 +518,19 @@ void DefineGeometryOptimization(py::module m) {
   // VPolytope
   {
     const auto& cls_doc = doc.VPolytope;
-    py::class_<VPolytope, ConvexSet>(m, "VPolytope", cls_doc.doc)
+    vpolytope_cls  // BR
         .def(py::init<>(), cls_doc.ctor.doc)
         .def(py::init<const Eigen::Ref<const Eigen::MatrixXd>&>(),
             py::arg("vertices"), cls_doc.ctor.doc_vertices)
-        .def(py::init<const HPolyhedron&>(), py::arg("H"),
-            cls_doc.ctor.doc_hpolyhedron)
+        .def(py::init<const HPolyhedron&, double>(), py::arg("H"),
+            py::arg("tol") = 1e-9, cls_doc.ctor.doc_hpolyhedron)
         .def(py::init<const QueryObject<double>&, GeometryId,
                  std::optional<FrameId>>(),
             py::arg("query_object"), py::arg("geometry_id"),
             py::arg("reference_frame") = std::nullopt,
             cls_doc.ctor.doc_scenegraph)
         .def("GetMinimalRepresentation", &VPolytope::GetMinimalRepresentation,
-            cls_doc.GetMinimalRepresentation.doc)
+            py::arg("tol") = 1e-9, cls_doc.GetMinimalRepresentation.doc)
         .def("vertices", &VPolytope::vertices, cls_doc.vertices.doc)
         .def_static("MakeBox", &VPolytope::MakeBox, py::arg("lb"),
             py::arg("ub"), cls_doc.MakeBox.doc)
@@ -464,7 +541,9 @@ void DefineGeometryOptimization(py::module m) {
         .def(py::pickle([](const VPolytope& self) { return self.vertices(); },
             [](Eigen::MatrixXd arg) { return VPolytope(arg); }));
   }
+}
 
+void DefineIris(py::module m) {
   {
     const auto& cls_doc = doc.IrisOptions;
     py::class_<IrisOptions> iris_options(m, "IrisOptions", cls_doc.doc);
@@ -507,6 +586,9 @@ void DefineGeometryOptimization(py::module m) {
             cls_doc.starting_ellipse.doc)
         .def_readwrite("bounding_region", &IrisOptions::bounding_region,
             cls_doc.bounding_region.doc)
+        .def_readwrite("verify_domain_boundedness",
+            &IrisOptions::verify_domain_boundedness,
+            cls_doc.verify_domain_boundedness.doc)
         .def_readwrite("num_additional_constraint_infeasible_samples",
             &IrisOptions::num_additional_constraint_infeasible_samples,
             cls_doc.num_additional_constraint_infeasible_samples.doc)
@@ -514,6 +596,8 @@ void DefineGeometryOptimization(py::module m) {
             "random_seed", &IrisOptions::random_seed, cls_doc.random_seed.doc)
         .def_readwrite("mixing_steps", &IrisOptions::mixing_steps,
             cls_doc.mixing_steps.doc)
+        .def_readwrite("solver_options", &IrisOptions::solver_options,
+            cls_doc.solver_options.doc)
         .def("__repr__", [](const IrisOptions& self) {
           return py::str(
               "IrisOptions("
@@ -597,7 +681,9 @@ void DefineGeometryOptimization(py::module m) {
       },
       py::arg("filename"), py::arg("child_name") = std::nullopt,
       "Calls LoadYamlFile() to deserialize an IrisRegions object.");
+}
 
+void DefineGraphOfConvexSetsAndRelated(py::module m) {
   // GraphOfConvexSetsOptions
   {
     const auto& cls_doc = doc.GraphOfConvexSetsOptions;
@@ -631,19 +717,33 @@ void DefineGeometryOptimization(py::module m) {
               self.solver_options = std::move(solver_options);
             }),
             cls_doc.solver_options.doc)
-        .def_property("rounding_solver_options",
+        .def_property("restriction_solver_options",
             py::cpp_function(
                 [](GraphOfConvexSetsOptions& self) {
-                  return &(self.rounding_solver_options);
+                  return &(self.restriction_solver_options);
                 },
                 py_rvp::reference_internal),
             py::cpp_function(
                 [](GraphOfConvexSetsOptions& self,
-                    solvers::SolverOptions rounding_solver_options) {
-                  self.rounding_solver_options =
-                      std::move(rounding_solver_options);
+                    solvers::SolverOptions restriction_solver_options) {
+                  self.restriction_solver_options =
+                      std::move(restriction_solver_options);
                 }),
-            cls_doc.rounding_solver_options.doc)
+            cls_doc.restriction_solver_options.doc)
+        .def_property("preprocessing_solver_options",
+            py::cpp_function(
+                [](GraphOfConvexSetsOptions& self) {
+                  return &(self.preprocessing_solver_options);
+                },
+                py_rvp::reference_internal),
+            py::cpp_function(
+                [](GraphOfConvexSetsOptions& self,
+                    solvers::SolverOptions preprocessing_solver_options) {
+                  self.preprocessing_solver_options =
+                      std::move(preprocessing_solver_options);
+                }),
+            cls_doc.preprocessing_solver_options.doc)
+        .def_readwrite("parallelism", &GraphOfConvexSetsOptions::parallelism)
         .def("__repr__", [](const GraphOfConvexSetsOptions& self) {
           return py::str(
               "GraphOfConvexSetsOptions("
@@ -654,21 +754,48 @@ void DefineGeometryOptimization(py::module m) {
               "flow_tolerance={}, "
               "rounding_seed={}, "
               "solver={}, "
+              "restriction_solver={}, "
+              "preprocessing_solver={}, "
               "solver_options={}, "
-              "rounding_solver_options={}, "
+              "restriction_solver_options={}, "
+              "preprocessing_solver_options={}, "
               ")")
               .format(self.convex_relaxation, self.preprocessing,
                   self.max_rounded_paths, self.max_rounding_trials,
                   self.flow_tolerance, self.rounding_seed, self.solver,
-                  self.solver_options, self.rounding_solver_options);
+                  self.restriction_solver, self.preprocessing_solver,
+                  self.solver_options, self.restriction_solver_options,
+                  self.preprocessing_solver_options);
         });
 
     DefReadWriteKeepAlive(&gcs_options, "solver",
         &GraphOfConvexSetsOptions::solver, cls_doc.solver.doc);
+    DefReadWriteKeepAlive(&gcs_options, "restriction_solver",
+        &GraphOfConvexSetsOptions::restriction_solver,
+        cls_doc.restriction_solver.doc);
+    DefReadWriteKeepAlive(&gcs_options, "preprocessing_solver",
+        &GraphOfConvexSetsOptions::preprocessing_solver,
+        cls_doc.preprocessing_solver.doc);
+  }
+
+  // GcsGraphvizOptions
+  {
+    using Class = GcsGraphvizOptions;
+    constexpr auto& cls_doc = doc.GcsGraphvizOptions;
+    py::class_<Class> cls(m, "GcsGraphvizOptions", cls_doc.doc);
+    cls.def(ParamInit<Class>());
+    DefAttributesUsingSerialize(&cls, cls_doc);
+    DefReprUsingSerialize(&cls);
+    DefCopyAndDeepCopy(&cls);
   }
 
   // GraphOfConvexSets
   {
+    const std::unordered_set<GraphOfConvexSets::Transcription>
+        all_transcriptions = {GraphOfConvexSets::Transcription::kMIP,
+            GraphOfConvexSets::Transcription::kRelaxation,
+            GraphOfConvexSets::Transcription::kRestriction};
+
     const auto& cls_doc = doc.GraphOfConvexSets;
     py::class_<GraphOfConvexSets> graph_of_convex_sets(
         m, "GraphOfConvexSets", cls_doc.doc);
@@ -677,6 +804,18 @@ void DefineGeometryOptimization(py::module m) {
         graph_of_convex_sets, "VertexId", doc.GraphOfConvexSets.VertexId.doc);
     BindIdentifier<GraphOfConvexSets::EdgeId>(
         graph_of_convex_sets, "EdgeId", doc.GraphOfConvexSets.EdgeId.doc);
+
+    // Transcription
+    constexpr auto& enum_doc = doc.GraphOfConvexSets.Transcription;
+    py::enum_<GraphOfConvexSets::Transcription> enum_py(
+        graph_of_convex_sets, "Transcription", enum_doc.doc);
+    enum_py  // BR
+        .value(
+            "kMIP", GraphOfConvexSets::Transcription::kMIP, enum_doc.kMIP.doc)
+        .value("kRelaxation", GraphOfConvexSets::Transcription::kRelaxation,
+            enum_doc.kRelaxation.doc)
+        .value("kRestriction", GraphOfConvexSets::Transcription::kRestriction,
+            enum_doc.kRestriction.doc);
 
     // Vertex
     const auto& vertex_doc = doc.GraphOfConvexSets.Vertex;
@@ -697,29 +836,51 @@ void DefineGeometryOptimization(py::module m) {
         .def("set", &GraphOfConvexSets::Vertex::set, py_rvp::reference_internal,
             vertex_doc.set.doc)
         .def("AddCost",
-            py::overload_cast<const symbolic::Expression&>(
+            py::overload_cast<const symbolic::Expression&,
+                const std::unordered_set<GraphOfConvexSets::Transcription>&>(
                 &GraphOfConvexSets::Vertex::AddCost),
-            py::arg("e"), vertex_doc.AddCost.doc_expression)
+            py::arg("e"), py::arg("use_in_transcription") = all_transcriptions,
+            vertex_doc.AddCost.doc_expression)
         .def("AddCost",
-            py::overload_cast<const solvers::Binding<solvers::Cost>&>(
+            py::overload_cast<const solvers::Binding<solvers::Cost>&,
+                const std::unordered_set<GraphOfConvexSets::Transcription>&>(
                 &GraphOfConvexSets::Vertex::AddCost),
-            py::arg("binding"), vertex_doc.AddCost.doc_binding)
+            py::arg("binding"),
+            py::arg("use_in_transcription") = all_transcriptions,
+            vertex_doc.AddCost.doc_binding)
         .def("AddConstraint",
             overload_cast_explicit<solvers::Binding<solvers::Constraint>,
-                const symbolic::Formula&>(
+                const symbolic::Formula&,
+                const std::unordered_set<GraphOfConvexSets::Transcription>&>(
                 &GraphOfConvexSets::Vertex::AddConstraint),
-            py::arg("f"), vertex_doc.AddConstraint.doc_formula)
+            py::arg("f"), py::arg("use_in_transcription") = all_transcriptions,
+            vertex_doc.AddConstraint.doc_formula)
         .def("AddConstraint",
             overload_cast_explicit<solvers::Binding<solvers::Constraint>,
-                const solvers::Binding<solvers::Constraint>&>(
+                const solvers::Binding<solvers::Constraint>&,
+                const std::unordered_set<GraphOfConvexSets::Transcription>&>(
                 &GraphOfConvexSets::Vertex::AddConstraint),
-            py::arg("binding"), vertex_doc.AddCost.doc_binding)
+            py::arg("binding"),
+            py::arg("use_in_transcription") = all_transcriptions,
+            vertex_doc.AddConstraint.doc_binding)
         .def("GetCosts", &GraphOfConvexSets::Vertex::GetCosts,
+            py::arg("used_in_transcription") = all_transcriptions,
             vertex_doc.GetCosts.doc)
         .def("GetConstraints", &GraphOfConvexSets::Vertex::GetConstraints,
+            py::arg("used_in_transcription") = all_transcriptions,
             vertex_doc.GetConstraints.doc)
-        .def("GetSolutionCost", &GraphOfConvexSets::Vertex::GetSolutionCost,
-            py::arg("result"), vertex_doc.GetSolutionCost.doc)
+        .def("GetSolutionCost",
+            overload_cast_explicit<std::optional<double>,
+                const solvers::MathematicalProgramResult&>(
+                &GraphOfConvexSets::Vertex::GetSolutionCost),
+            py::arg("result"), vertex_doc.GetSolutionCost.doc_1args)
+        .def("GetSolutionCost",
+            overload_cast_explicit<std::optional<double>,
+                const solvers::MathematicalProgramResult&,
+                const solvers::Binding<solvers::Cost>&>(
+                &GraphOfConvexSets::Vertex::GetSolutionCost),
+            py::arg("result"), py::arg("cost"),
+            vertex_doc.GetSolutionCost.doc_2args)
         .def("GetSolution", &GraphOfConvexSets::Vertex::GetSolution,
             py::arg("result"), vertex_doc.GetSolution.doc)
         .def("incoming_edges", &GraphOfConvexSets::Vertex::incoming_edges,
@@ -754,34 +915,56 @@ void DefineGeometryOptimization(py::module m) {
                 -> const VectorX<symbolic::Variable> { return self.xv(); },
             edge_doc.xv.doc)
         .def("AddCost",
-            py::overload_cast<const symbolic::Expression&>(
+            py::overload_cast<const symbolic::Expression&,
+                const std::unordered_set<GraphOfConvexSets::Transcription>&>(
                 &GraphOfConvexSets::Edge::AddCost),
-            py::arg("e"), edge_doc.AddCost.doc_expression)
+            py::arg("e"), py::arg("use_in_transcription") = all_transcriptions,
+            edge_doc.AddCost.doc_expression)
         .def("AddCost",
-            py::overload_cast<const solvers::Binding<solvers::Cost>&>(
+            py::overload_cast<const solvers::Binding<solvers::Cost>&,
+                const std::unordered_set<GraphOfConvexSets::Transcription>&>(
                 &GraphOfConvexSets::Edge::AddCost),
-            py::arg("binding"), edge_doc.AddCost.doc_binding)
+            py::arg("binding"),
+            py::arg("use_in_transcription") = all_transcriptions,
+            edge_doc.AddCost.doc_binding)
         .def("AddConstraint",
             overload_cast_explicit<solvers::Binding<solvers::Constraint>,
-                const symbolic::Formula&>(
+                const symbolic::Formula&,
+                const std::unordered_set<GraphOfConvexSets::Transcription>&>(
                 &GraphOfConvexSets::Edge::AddConstraint),
-            py::arg("f"), edge_doc.AddConstraint.doc_formula)
+            py::arg("f"), py::arg("use_in_transcription") = all_transcriptions,
+            edge_doc.AddConstraint.doc_formula)
         .def("AddConstraint",
             overload_cast_explicit<solvers::Binding<solvers::Constraint>,
-                const solvers::Binding<solvers::Constraint>&>(
+                const solvers::Binding<solvers::Constraint>&,
+                const std::unordered_set<GraphOfConvexSets::Transcription>&>(
                 &GraphOfConvexSets::Edge::AddConstraint),
-            py::arg("binding"), edge_doc.AddCost.doc_binding)
+            py::arg("binding"),
+            py::arg("use_in_transcription") = all_transcriptions,
+            edge_doc.AddConstraint.doc_binding)
         .def("AddPhiConstraint", &GraphOfConvexSets::Edge::AddPhiConstraint,
             py::arg("phi_value"), edge_doc.AddPhiConstraint.doc)
         .def("ClearPhiConstraints",
             &GraphOfConvexSets::Edge::ClearPhiConstraints,
             edge_doc.ClearPhiConstraints.doc)
         .def("GetCosts", &GraphOfConvexSets::Edge::GetCosts,
+            py::arg("used_in_transcription") = all_transcriptions,
             edge_doc.GetCosts.doc)
         .def("GetConstraints", &GraphOfConvexSets::Edge::GetConstraints,
+            py::arg("used_in_transcription") = all_transcriptions,
             edge_doc.GetConstraints.doc)
-        .def("GetSolutionCost", &GraphOfConvexSets::Edge::GetSolutionCost,
-            py::arg("result"), edge_doc.GetSolutionCost.doc)
+        .def("GetSolutionCost",
+            overload_cast_explicit<std::optional<double>,
+                const solvers::MathematicalProgramResult&>(
+                &GraphOfConvexSets::Edge::GetSolutionCost),
+            py::arg("result"), edge_doc.GetSolutionCost.doc_1args)
+        .def("GetSolutionCost",
+            overload_cast_explicit<std::optional<double>,
+                const solvers::MathematicalProgramResult&,
+                const solvers::Binding<solvers::Cost>&>(
+                &GraphOfConvexSets::Edge::GetSolutionCost),
+            py::arg("result"), py::arg("cost"),
+            edge_doc.GetSolutionCost.doc_2args)
         .def("GetSolutionPhiXu", &GraphOfConvexSets::Edge::GetSolutionPhiXu,
             py::arg("result"), edge_doc.GetSolutionPhiXu.doc)
         .def("GetSolutionPhiXv", &GraphOfConvexSets::Edge::GetSolutionPhiXv,
@@ -789,6 +972,9 @@ void DefineGeometryOptimization(py::module m) {
 
     graph_of_convex_sets  // BR
         .def(py::init<>(), cls_doc.ctor.doc)
+        .def("num_vertices", &GraphOfConvexSets::num_vertices,
+            cls_doc.num_vertices.doc)
+        .def("num_edges", &GraphOfConvexSets::num_edges, cls_doc.num_edges.doc)
         .def("AddVertex", &GraphOfConvexSets::AddVertex, py::arg("set"),
             py::arg("name") = "", py_rvp::reference_internal,
             cls_doc.AddVertex.doc)
@@ -814,12 +1000,53 @@ void DefineGeometryOptimization(py::module m) {
             overload_cast_explicit<std::vector<GraphOfConvexSets::Edge*>>(
                 &GraphOfConvexSets::Edges),
             py_rvp::reference_internal, cls_doc.Edges.doc)
+        .def("IsValid",
+            overload_cast_explicit<bool, const GraphOfConvexSets::Vertex&>(
+                &GraphOfConvexSets::IsValid),
+            py::arg("v"), cls_doc.IsValid.doc_vertex)
+        .def("IsValid",
+            overload_cast_explicit<bool, const GraphOfConvexSets::Edge&>(
+                &GraphOfConvexSets::IsValid),
+            py::arg("e"), cls_doc.IsValid.doc_edge)
         .def("ClearAllPhiConstraints",
             &GraphOfConvexSets::ClearAllPhiConstraints,
             cls_doc.ClearAllPhiConstraints.doc)
-        .def("GetGraphvizString", &GraphOfConvexSets::GetGraphvizString,
-            py::arg("result") = std::nullopt, py::arg("show_slacks") = true,
-            py::arg("precision") = 3, py::arg("scientific") = false,
+        .def(
+            "GetGraphvizString",
+            [](const GraphOfConvexSets& self,
+                const solvers::MathematicalProgramResult* result,
+                const GcsGraphvizOptions& options,
+                // Pass by value to resolve #21816.
+                std::vector<const GraphOfConvexSets::Edge*> active_path) {
+              return self.GetGraphvizString(result, options, &active_path);
+            },
+            py::arg("result") = nullptr,
+            py::arg("options") = GcsGraphvizOptions(),
+            py::arg("active_path") =
+                std::vector<const GraphOfConvexSets::Edge*>(),
+            cls_doc.GetGraphvizString.doc)
+        .def(
+            "GetGraphvizString",
+            [](const GraphOfConvexSets& self,
+                const solvers::MathematicalProgramResult* result,
+                bool show_slacks, bool show_vars, bool show_flows,
+                bool show_costs, bool scientific, int precision,
+                // Pass by value to resolve #21816.
+                std::vector<const GraphOfConvexSets::Edge*> active_path) {
+              const GcsGraphvizOptions options{.show_slacks = show_slacks,
+                  .show_vars = show_vars,
+                  .show_flows = show_flows,
+                  .show_costs = show_costs,
+                  .scientific = scientific,
+                  .precision = precision};
+              return self.GetGraphvizString(result, options, &active_path);
+            },
+            py::arg("result") = nullptr, py::arg("show_slacks") = true,
+            py::arg("show_vars") = true, py::arg("show_flows") = true,
+            py::arg("show_costs") = true, py::arg("scientific") = false,
+            py::arg("precision") = 3,
+            py::arg("active_path") =
+                std::vector<const GraphOfConvexSets::Edge*>(),
             cls_doc.GetGraphvizString.doc)
         .def("SolveShortestPath",
             overload_cast_explicit<solvers::MathematicalProgramResult,
@@ -829,18 +1056,82 @@ void DefineGeometryOptimization(py::module m) {
                 &GraphOfConvexSets::SolveShortestPath),
             py::arg("source"), py::arg("target"),
             py::arg("options") = GraphOfConvexSetsOptions(),
-            cls_doc.SolveShortestPath.doc)
+            cls_doc.SolveShortestPath.doc,
+            // Parallelism may be used when solving, so we must release the GIL.
+            py::call_guard<py::gil_scoped_release>())
         .def("GetSolutionPath", &GraphOfConvexSets::GetSolutionPath,
             py::arg("source"), py::arg("target"), py::arg("result"),
             py::arg("tolerance") = 1e-3, py_rvp::reference_internal,
             cls_doc.GetSolutionPath.doc)
+        .def("SamplePaths",
+            overload_cast_explicit<
+                std::vector<std::vector<const GraphOfConvexSets::Edge*>>,
+                const GraphOfConvexSets::Vertex&,
+                const GraphOfConvexSets::Vertex&,
+                const std::unordered_map<const GraphOfConvexSets::Edge*,
+                    double>&,
+                const GraphOfConvexSetsOptions&>(
+                &GraphOfConvexSets::SamplePaths),
+            py::arg("source"), py::arg("target"), py::arg("flows"),
+            py::arg("options"), py::return_value_policy::reference_internal,
+            cls_doc.SamplePaths.doc_flows)
+        .def("SamplePaths",
+            overload_cast_explicit<
+                std::vector<std::vector<const GraphOfConvexSets::Edge*>>,
+                const GraphOfConvexSets::Vertex&,
+                const GraphOfConvexSets::Vertex&,
+                const solvers::MathematicalProgramResult&,
+                const GraphOfConvexSetsOptions&>(
+                &GraphOfConvexSets::SamplePaths),
+            py::arg("source"), py::arg("target"), py::arg("result"),
+            py::arg("options"), py::return_value_policy::reference_internal,
+            cls_doc.SamplePaths.doc_result)
         .def("SolveConvexRestriction",
             &GraphOfConvexSets::SolveConvexRestriction, py::arg("active_edges"),
             py::arg("options") = GraphOfConvexSetsOptions(),
+            py::arg("initial_guess") = nullptr,
             cls_doc.SolveConvexRestriction.doc);
   }
+
+  // Trampoline class to support deriving from ImplicitGraphOfConvexSets in
+  // python.
+  class PyImplicitGraphOfConvexSets
+      : public py::wrapper<ImplicitGraphOfConvexSets> {
+   public:
+    using Base = py::wrapper<ImplicitGraphOfConvexSets>;
+    using Base::Base;
+    using Base::mutable_gcs;
+
+    PyImplicitGraphOfConvexSets() : Base() {}
+
+    // Trampoline virtual methods.
+
+    void Expand(GraphOfConvexSets::Vertex* v) override {
+      PYBIND11_OVERLOAD_PURE(void, ImplicitGraphOfConvexSets, Expand, v);
+    }
+  };
+
+  py::class_<ImplicitGraphOfConvexSets, PyImplicitGraphOfConvexSets>
+      implicit_gcs_cls(
+          m, "ImplicitGraphOfConvexSets", doc.ImplicitGraphOfConvexSets.doc);
+  implicit_gcs_cls.def(py::init<>(), doc.ImplicitGraphOfConvexSets.ctor.doc)
+      .def("Successors", &ImplicitGraphOfConvexSets::Successors,
+          py_rvp::reference_internal, py::arg("v"),
+          doc.ImplicitGraphOfConvexSets.Successors.doc)
+      .def("ExpandRecursively", &ImplicitGraphOfConvexSets::ExpandRecursively,
+          py_rvp::reference_internal, py::arg("start"),
+          py::arg("max_successor_calls") = 1000,
+          doc.ImplicitGraphOfConvexSets.ExpandRecursively.doc)
+      .def("gcs", &PyImplicitGraphOfConvexSets::gcs, py_rvp::reference_internal,
+          doc.ImplicitGraphOfConvexSets.gcs.doc)
+      .def("mutable_gcs", &PyImplicitGraphOfConvexSets::mutable_gcs,
+          py_rvp::reference_internal,
+          doc.ImplicitGraphOfConvexSets.mutable_gcs.doc);
+}
+
+// Definitions for c_iris_collision_geometry.h.
+void DefineCIrisCollisionGeometry(py::module m) {
   {
-    // Definitions for c_iris_collision_geometry.h/cc
     py::enum_<PlaneSide>(m, "PlaneSide", doc.PlaneSide.doc)
         .value("kPositive", PlaneSide::kPositive)
         .value("kNegative", PlaneSide::kNegative);
@@ -871,16 +1162,11 @@ void DefineGeometryOptimization(py::module m) {
         .def("num_rationals", &CIrisCollisionGeometry::num_rationals,
             doc.CIrisCollisionGeometry.num_rationals.doc);
   }
+}
+
+// Definitions for cpsace_free_structs.h.
+void DefineCspaceFreeStructs(py::module m) {
   {
-    py::enum_<SeparatingPlaneOrder>(
-        m, "SeparatingPlaneOrder", doc.SeparatingPlaneOrder.doc)
-        .value("kAffine", SeparatingPlaneOrder::kAffine,
-            doc.SeparatingPlaneOrder.kAffine.doc);
-    type_visit([m](auto dummy) { DoSeparatingPlaneDeclaration(m, dummy); },
-        type_pack<double, symbolic::Variable>());
-  }
-  {
-    // Definitions for cpsace_free_structs.h/cc
     constexpr auto& prog_doc = doc.SeparationCertificateProgramBase;
     auto prog_cls = py::class_<SeparationCertificateProgramBase>(
         m, "SeparationCertificateProgramBase", prog_doc.doc)
@@ -918,20 +1204,10 @@ void DefineGeometryOptimization(py::module m) {
                 &FindSeparationCertificateOptions::terminate_at_failure)
             .def_readwrite("solver_options",
                 &FindSeparationCertificateOptions::solver_options);
-    constexpr char kNumThreadsDeprecated[] =
-        "FindSeparationCertificateOptions.num_threads is deprecated and will "
-        "be removed on or after 2024-05-01. Use options.parallelism instead.";
-    find_options_cls.def_property("num_threads",
-        WrapDeprecated(kNumThreadsDeprecated,
-            [](const FindSeparationCertificateOptions& self) {
-              return self.parallelism.num_threads();
-            }),
-        WrapDeprecated(kNumThreadsDeprecated,
-            [](FindSeparationCertificateOptions& self, int num_threads) {
-              self.parallelism =
-                  (num_threads > 0) ? num_threads : Parallelism::Max();
-            }));
   }
+}
+
+void DefineCspaceFreePolytopeAndRelated(py::module m) {
   {
     using BaseClass = CspaceFreePolytopeBase;
     const auto& base_cls_doc = doc.CspaceFreePolytopeBase;
@@ -962,56 +1238,7 @@ void DefineGeometryOptimization(py::module m) {
     const auto& cls_doc = doc.CspaceFreePolytope;
     py::class_<Class, BaseClass> cspace_free_polytope_cls(
         m, "CspaceFreePolytope", cls_doc.doc);
-    cspace_free_polytope_cls
-        .def(py::init<const multibody::MultibodyPlant<double>*,
-                 const geometry::SceneGraph<double>*, SeparatingPlaneOrder,
-                 const Eigen::Ref<const Eigen::VectorXd>&,
-                 const Class::Options&>(),
-            py::arg("plant"), py::arg("scene_graph"), py::arg("plane_order"),
-            py::arg("q_star"), py::arg("options") = Class::Options(),
-            // Keep alive, reference: `self` keeps `plant` alive.
-            py::keep_alive<1, 2>(),
-            // Keep alive, reference: `self` keeps `scene_graph` alive.
-            py::keep_alive<1, 3>(), cls_doc.ctor.doc)
-        .def(
-            "FindSeparationCertificateGivenPolytope",
-            [](const CspaceFreePolytope* self,
-                const Eigen::Ref<const Eigen::MatrixXd>& C,
-                const Eigen::Ref<const Eigen::VectorXd>& d,
-                const CspaceFreePolytope::IgnoredCollisionPairs&
-                    ignored_collision_pairs,
-                const CspaceFreePolytope::
-                    FindSeparationCertificateGivenPolytopeOptions& options) {
-              std::unordered_map<SortedPair<geometry::GeometryId>,
-                  CspaceFreePolytope::SeparationCertificateResult>
-                  certificates;
-              bool success = self->FindSeparationCertificateGivenPolytope(
-                  C, d, ignored_collision_pairs, options, &certificates);
-              return std::pair(success, certificates);
-            },
-            py::arg("C"), py::arg("d"), py::arg("ignored_collision_pairs"),
-            py::arg("options"),
-            // The `options` contains a `Parallelism`; we must release the GIL.
-            py::call_guard<py::gil_scoped_release>(),
-            cls_doc.FindSeparationCertificateGivenPolytope.doc)
-        .def("SearchWithBilinearAlternation",
-            &Class::SearchWithBilinearAlternation,
-            py::arg("ignored_collision_pairs"), py::arg("C_init"),
-            py::arg("d_init"), py::arg("options"),
-            cls_doc.SearchWithBilinearAlternation.doc)
-        .def("BinarySearch", &Class::BinarySearch,
-            py::arg("ignored_collision_pairs"), py::arg("C"), py::arg("d"),
-            py::arg("s_center"), py::arg("options"), cls_doc.BinarySearch.doc)
-        .def("MakeIsGeometrySeparableProgram",
-            &Class::MakeIsGeometrySeparableProgram, py::arg("geometry_pair"),
-            py::arg("C"), py::arg("d"),
-            cls_doc.MakeIsGeometrySeparableProgram.doc)
-        .def("SolveSeparationCertificateProgram",
-            &Class::SolveSeparationCertificateProgram,
-            py::arg("certificate_program"), py::arg("options"),
-            // The `options` contains a `Parallelism`; we must release the GIL.
-            py::call_guard<py::gil_scoped_release>(),
-            cls_doc.SolveSeparationCertificateProgram.doc);
+
     py::class_<Class::SeparatingPlaneLagrangians>(cspace_free_polytope_cls,
         "SeparatingPlaneLagrangians", cls_doc.SeparatingPlaneLagrangians.doc)
         .def(py::init<int, int>(), py::arg("C_rows"), py::arg("s_size"),
@@ -1148,9 +1375,61 @@ void DefineGeometryOptimization(py::module m) {
             "convergence_tol", &Class::BinarySearchOptions::convergence_tol)
         .def_readonly("find_lagrangian_options",
             &Class::BinarySearchOptions::find_lagrangian_options);
-  }
 
-  using drake::geometry::optimization::ConvexSet;
+    cspace_free_polytope_cls
+        .def(py::init<const multibody::MultibodyPlant<double>*,
+                 const geometry::SceneGraph<double>*, SeparatingPlaneOrder,
+                 const Eigen::Ref<const Eigen::VectorXd>&,
+                 const Class::Options&>(),
+            py::arg("plant"), py::arg("scene_graph"), py::arg("plane_order"),
+            py::arg("q_star"), py::arg("options") = Class::Options(),
+            // Keep alive, reference: `self` keeps `plant` alive.
+            py::keep_alive<1, 2>(),
+            // Keep alive, reference: `self` keeps `scene_graph` alive.
+            py::keep_alive<1, 3>(), cls_doc.ctor.doc)
+        .def(
+            "FindSeparationCertificateGivenPolytope",
+            [](const CspaceFreePolytope* self,
+                const Eigen::Ref<const Eigen::MatrixXd>& C,
+                const Eigen::Ref<const Eigen::VectorXd>& d,
+                const CspaceFreePolytope::IgnoredCollisionPairs&
+                    ignored_collision_pairs,
+                const CspaceFreePolytope::
+                    FindSeparationCertificateGivenPolytopeOptions& options) {
+              std::unordered_map<SortedPair<geometry::GeometryId>,
+                  CspaceFreePolytope::SeparationCertificateResult>
+                  certificates;
+              bool success = self->FindSeparationCertificateGivenPolytope(
+                  C, d, ignored_collision_pairs, options, &certificates);
+              return std::pair(success, certificates);
+            },
+            py::arg("C"), py::arg("d"), py::arg("ignored_collision_pairs"),
+            py::arg("options"),
+            // The `options` contains a `Parallelism`; we must release the GIL.
+            py::call_guard<py::gil_scoped_release>(),
+            cls_doc.FindSeparationCertificateGivenPolytope.doc)
+        .def("SearchWithBilinearAlternation",
+            &Class::SearchWithBilinearAlternation,
+            py::arg("ignored_collision_pairs"), py::arg("C_init"),
+            py::arg("d_init"), py::arg("options"),
+            cls_doc.SearchWithBilinearAlternation.doc)
+        .def("BinarySearch", &Class::BinarySearch,
+            py::arg("ignored_collision_pairs"), py::arg("C"), py::arg("d"),
+            py::arg("s_center"), py::arg("options"), cls_doc.BinarySearch.doc)
+        .def("MakeIsGeometrySeparableProgram",
+            &Class::MakeIsGeometrySeparableProgram, py::arg("geometry_pair"),
+            py::arg("C"), py::arg("d"),
+            cls_doc.MakeIsGeometrySeparableProgram.doc)
+        .def("SolveSeparationCertificateProgram",
+            &Class::SolveSeparationCertificateProgram,
+            py::arg("certificate_program"), py::arg("options"),
+            // The `options` contains a `Parallelism`; we must release the GIL.
+            py::call_guard<py::gil_scoped_release>(),
+            cls_doc.SolveSeparationCertificateProgram.doc);
+  }
+}
+
+void DefineGeodesicConvexity(py::module m) {
   m.def("CheckIfSatisfiesConvexityRadius", &CheckIfSatisfiesConvexityRadius,
       py::arg("convex_set"), py::arg("continuous_revolute_joints"),
       doc.CheckIfSatisfiesConvexityRadius.doc);
@@ -1188,26 +1467,85 @@ void DefineGeometryOptimization(py::module m) {
       doc.PartitionConvexSet
           .doc_3args_convex_sets_continuous_revolute_joints_epsilon);
   m.def(
-      "CalcPairwiseIntersections",
+      "ComputePairwiseIntersections",
       [](const std::vector<ConvexSet*>& convex_sets_A,
           const std::vector<ConvexSet*>& convex_sets_B,
-          const std::vector<int>& continuous_revolute_joints) {
-        return CalcPairwiseIntersections(CloneConvexSets(convex_sets_A),
-            CloneConvexSets(convex_sets_B), continuous_revolute_joints);
+          const std::vector<int>& continuous_revolute_joints,
+          bool preprocess_bbox, Parallelism parallelism) {
+        return ComputePairwiseIntersections(CloneConvexSets(convex_sets_A),
+            CloneConvexSets(convex_sets_B), continuous_revolute_joints,
+            preprocess_bbox, parallelism);
       },
       py::arg("convex_sets_A"), py::arg("convex_sets_B"),
-      py::arg("continuous_revolute_joints"),
-      doc.CalcPairwiseIntersections.doc_3args);
+      py::arg("continuous_revolute_joints"), py::arg("preprocess_bbox") = true,
+      py::arg("parallelism") = Parallelism::Max(),
+      doc.ComputePairwiseIntersections
+          .doc_5args_convex_sets_A_convex_sets_B_continuous_revolute_joints_preprocess_bbox_parallelism,
+      py::call_guard<py::gil_scoped_release>());
   m.def(
-      "CalcPairwiseIntersections",
+      "ComputePairwiseIntersections",
+      [](const std::vector<ConvexSet*>& convex_sets_A,
+          const std::vector<ConvexSet*>& convex_sets_B,
+          const std::vector<int>& continuous_revolute_joints,
+          const std::vector<Hyperrectangle>& bboxes_A,
+          const std::vector<Hyperrectangle>& bboxes_B,
+          Parallelism parallelism) {
+        return ComputePairwiseIntersections(CloneConvexSets(convex_sets_A),
+            CloneConvexSets(convex_sets_B), continuous_revolute_joints,
+            bboxes_A, bboxes_B, parallelism);
+      },
+      py::arg("convex_sets_A"), py::arg("convex_sets_B"),
+      py::arg("continuous_revolute_joints"), py::arg("bboxes_A"),
+      py::arg("bboxes_B"), py::arg("parallelism") = Parallelism::Max(),
+      doc.ComputePairwiseIntersections
+          .doc_6args_convex_sets_A_convex_sets_B_continuous_revolute_joints_bboxes_A_bboxes_B_parallelism,
+      py::call_guard<py::gil_scoped_release>());
+  m.def(
+      "ComputePairwiseIntersections",
       [](const std::vector<ConvexSet*>& convex_sets,
-          const std::vector<int>& continuous_revolute_joints) {
-        return CalcPairwiseIntersections(
-            CloneConvexSets(convex_sets), continuous_revolute_joints);
+          const std::vector<int>& continuous_revolute_joints,
+          bool preprocess_bbox, Parallelism parallelism) {
+        return ComputePairwiseIntersections(CloneConvexSets(convex_sets),
+            continuous_revolute_joints, preprocess_bbox, parallelism);
       },
       py::arg("convex_sets"), py::arg("continuous_revolute_joints"),
-      doc.CalcPairwiseIntersections.doc_2args);
-  // NOLINTNEXTLINE(readability/fn_size)
+      py::arg("preprocess_bbox") = true,
+      py::arg("parallelism") = Parallelism::Max(),
+      doc.ComputePairwiseIntersections
+          .doc_4args_convex_sets_continuous_revolute_joints_preprocess_bbox_parallelism,
+      py::call_guard<py::gil_scoped_release>());
+  m.def(
+      "ComputePairwiseIntersections",
+      [](const std::vector<ConvexSet*>& convex_sets,
+          const std::vector<int>& continuous_revolute_joints,
+          const std::vector<Hyperrectangle>& bboxes, Parallelism parallelism) {
+        return ComputePairwiseIntersections(CloneConvexSets(convex_sets),
+            continuous_revolute_joints, bboxes, parallelism);
+      },
+      py::arg("convex_sets"), py::arg("continuous_revolute_joints"),
+      py::arg("bboxes") = std::vector<Hyperrectangle>{},
+      py::arg("parallelism") = Parallelism::Max(),
+      doc.ComputePairwiseIntersections
+          .doc_4args_convex_sets_continuous_revolute_joints_bboxes_parallelism,
+      py::call_guard<py::gil_scoped_release>());
+}
+
+}  // namespace
+
+void DefineGeometryOptimization(py::module m) {
+  m.doc() = "Local bindings for `drake::geometry::optimization`";
+
+  py::module::import("pydrake.solvers");
+
+  // This list must remain in topological dependency order.
+  DefineConvexSetBaseClassAndSubclasses(m);
+  DefineGeodesicConvexity(m);
+  DefineGraphOfConvexSetsAndRelated(m);
+  DefineIris(m);
+  DefineCIrisCollisionGeometry(m);
+  DefineCspaceSeparatingPlane(m);
+  DefineCspaceFreeStructs(m);
+  DefineCspaceFreePolytopeAndRelated(m);
 }
 
 }  // namespace pydrake

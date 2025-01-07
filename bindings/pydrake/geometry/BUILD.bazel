@@ -1,3 +1,4 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 load("//tools/install:install.bzl", "install")
 load(
     "//tools/skylark:drake_cc.bzl",
@@ -13,7 +14,6 @@ load(
     "get_drake_py_installs",
     "get_pybind_package_info",
 )
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 
 package(default_visibility = [
     "//bindings:__subpackages__",
@@ -38,11 +38,13 @@ drake_pybind_library(
         "//bindings/pydrake/common:default_scalars_pybind",
         "//bindings/pydrake/common:deprecation_pybind",
         "//bindings/pydrake/common:identifier_pybind",
+        "//bindings/pydrake/common:ref_cycle_pybind",
         "//bindings/pydrake/common:serialize_pybind",
         "//bindings/pydrake/common:sorted_pair_pybind",
         "//bindings/pydrake/common:type_pack",
         "//bindings/pydrake/common:type_safe_index_pybind",
         "//bindings/pydrake/common:value_pybind",
+        "//bindings/pydrake/systems:builder_life_support_pybind",
     ],
     cc_so_name = "__init__",
     cc_srcs = [
@@ -50,6 +52,7 @@ drake_pybind_library(
         "geometry_py.h",
         "geometry_py_common.cc",
         "geometry_py_hydro.cc",
+        "geometry_py_meshes.cc",
         "geometry_py_optimization.cc",
         "geometry_py_render.cc",
         "geometry_py_scene_graph.cc",
@@ -106,10 +109,20 @@ drake_py_unittest(
 )
 
 drake_py_unittest(
+    name = "meshes_test",
+    data = [
+        "//geometry:test_obj_files",
+    ],
+    deps = [
+        ":geometry",
+        "//bindings/pydrake/common/test_utilities",
+    ],
+)
+
+drake_py_unittest(
     name = "optimization_test",
     deps = [
         ":geometry",
-        "//bindings/pydrake/common/test_utilities:deprecation_py",
         "//bindings/pydrake/common/test_utilities:pickle_compare_py",
         "//bindings/pydrake/multibody:inverse_kinematics_py",
         "//bindings/pydrake/multibody:parsing_py",
@@ -121,6 +134,9 @@ drake_py_unittest(
 drake_py_unittest(
     name = "render_test",
     allow_network = ["render_gltf_client"],
+    data = [
+        "//geometry/render:test_models",
+    ],
     deps = [
         ":geometry",
         "//bindings/pydrake/common/test_utilities",
@@ -130,6 +146,7 @@ drake_py_unittest(
 
 drake_py_unittest(
     name = "render_engine_gl_test",
+    display = True,
     deps = [
         ":geometry",
         "//bindings/pydrake/common/test_utilities",
@@ -165,6 +182,7 @@ drake_py_unittest(
         "//bindings/pydrake/multibody:plant_py",
         "//bindings/pydrake/systems:analysis_py",
         "//bindings/pydrake/systems:lcm_py",
+        "//bindings/pydrake/systems:test_util_py",
     ],
 )
 

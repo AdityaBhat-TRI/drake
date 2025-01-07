@@ -18,6 +18,7 @@ const char* const kElastic = "hydroelastic_modulus";
 const char* const kRezHint = "resolution_hint";
 const char* const kComplianceType = "compliance_type";
 const char* const kSlabThickness = "slab_thickness";
+const char* const kMargin = "margin";
 
 namespace {
 
@@ -82,8 +83,8 @@ std::ostream& operator<<(std::ostream& out, const HydroelasticType& type) {
 }  // namespace internal
 
 void AddContactMaterial(
-    const std::optional<double>& dissipation,
-    const std::optional<double>& point_stiffness,
+    std::optional<double> dissipation,
+    std::optional<double> point_stiffness,
     const std::optional<multibody::CoulombFriction<double>>& friction,
     ProximityProperties* properties) {
   DRAKE_DEMAND(properties != nullptr);

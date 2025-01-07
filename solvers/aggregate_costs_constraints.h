@@ -84,6 +84,14 @@ void AggregateBoundingBoxConstraints(const MathematicalProgram& prog,
                                      Eigen::VectorXd* upper);
 
 /**
+ * Overloads AggregateBoundingBoxConstraints, but the type of lower and upper
+ * are std::vector<double>.
+ */
+void AggregateBoundingBoxConstraints(const MathematicalProgram& prog,
+                                     std::vector<double>* lower,
+                                     std::vector<double>* upper);
+
+/**
  For linear expression A * vars where `vars` might contain duplicated entries,
  rewrite this linear expression as A_new * vars_new where vars_new doesn't
  contain duplicated entries.
@@ -137,7 +145,7 @@ void ParseLinearCosts(const MathematicalProgram& prog, std::vector<double>* c,
 // @param[in/out] A_row_count The number of rows in A before and after calling
 // this function.
 // @param[out] linear_eq_y_start_indices linear_eq_y_start_indices[i] is the
-// starting index of the dual variable for the constraint
+// starting index of the dual variables for the constraint
 // prog.linear_equality_constraints()[i]. Namely y[linear_eq_y_start_indices[i]:
 // linear_eq_y_start_indices[i] +
 // prog.linear_equality_constraints()[i].evaluator()->num_constraints] are the
@@ -189,6 +197,43 @@ void ParseLinearConstraints(const solvers::MathematicalProgram& prog,
 void ParseQuadraticCosts(const MathematicalProgram& prog,
                          std::vector<Eigen::Triplet<double>>* P_upper_triplets,
                          std::vector<double>* c, double* constant);
+
+// Parse a L2NormCost |Cx+d|₂ to Clarabel/SCS format.
+// We need to
+// 1. Append a slack variable t.
+// 2. Impose the constraint t >= |Cx+d|₂ as a Lorentz cone constraint.
+// 3. Add the cost t.
+// For the second step, we formulate it as
+// [ 0  -1] * [x] + s = [0]       (1)
+// [-C   0]   [t]       [d]
+// s is in Lorentz cone.          (2)
+// @param[in] prog We parse all prog.l2norm_costs().
+// @param[in/out] num_solver_variables The number of variables in the solver
+// before/after parsing this L2NormCost. The new slack variable t will be
+// appended after the existing variables in the solver.
+// @param[in/out] A_triplets We append the left hand side of the linear
+// constraints (1) to A_triplets.
+// @param[in/out] b We append the right hand side of the linear constraints (1)
+// to b.
+// @param[in/out] A_row_count The number of rows in A before/after appending the
+// second order cone constraints.
+// @param[in/out] second_order_cone_length The dimension of each second order
+// cone in the overall program.
+// @param[in/out] lorentz_cone_y_start_indices The starting indices of s in each
+// Lorentz cone constraints, before/after calling this function. We append the
+// indices of the dual variables for the Lorentz cone constraint to
+// lorentz_cone_y_start_indices.
+// @param[out] cost_coeffs The coefficient of each variable in the cost.
+// @param[out] t_slack_indices The index of the new variable t in the solver
+// (such as Clarabel or SCS, not in the MathematicalProgram object).
+void ParseL2NormCosts(const MathematicalProgram& prog,
+                      int* num_solver_variables,
+                      std::vector<Eigen::Triplet<double>>* A_triplets,
+                      std::vector<double>* b, int* A_row_count,
+                      std::vector<int>* second_order_cone_length,
+                      std::vector<int>* lorentz_cone_y_start_indices,
+                      std::vector<double>* cost_coeffs,
+                      std::vector<int>* t_slack_indices);
 
 // Parse all second order cone constraints (including both Lorentz cone and
 // rotated Lorentz cone constraint) to the form A*x+s=b, s in K where K is the
@@ -275,6 +320,8 @@ void ParseExponentialConeConstraints(
 // prog.linear_matrix_inequality_constraints() into SCS/Clarabel format.
 // A * x + s = b
 // s in K
+// We handle the SDP or LMI constraints when the PSD matrix has >= 3 rows. For
+// PSD matrices with 1 or 2 rows, we handle them separately.
 // Note that the SCS/Clarabel solver defines its psd cone with a √2 scaling on
 // the off-diagonal terms in the positive semidefinite matrix. Refer to
 // https://www.cvxgrp.org/scs/api/cones.html#semidefinite-cones and
@@ -291,13 +338,76 @@ void ParseExponentialConeConstraints(
 // prog.linear_matrix_inequality_constraints() will be appended to b.
 // @param[in/out] A_row_count The number of rows in A before and after calling
 // this function.
-// @param[out] psd_cone_length The length of all the psd cones from
-// prog.positive_semidefinite_constraints() and
-// prog.linear_matrix_inequality_constraints().
+// @param[out] psd_cone_length psd_cone_length[i] is the length of the PSD cones
+// from prog.positive_semidefinite_constraints()[i]. If this
+// PositiveSemidefiniteConstraint is not parsed as a PSD cone constraint in the
+// solver (for example, it is parsed as a linear constraint or second order cone
+// constraint), then psd_cone_length[i] = std::nullopt. The input should be an
+// empty vector.
+// @param[out] lmi_cone_length lmi_cone_length[i] is the length of the PSD cones
+// from prog.linear_matrix_inequality_constraints()[i]. If this
+// LinearMatrixInequalityConstraint is not parsed as a PSD cone constraint in
+// the solver (for example, it is parsed as a linear constraint or second order
+// cone constraint), then lmi_cone_length[i] = std::nullopt. The input should be
+// an empty vector.
+// @param[out] psd_y_start_indices y[psd_y_start_indices[i]:
+// psd_y_start_indices[i] + psd_cone_length[i]] are the dual variables for
+// prog.positive_semidefinite_constraints()[i]. If
+// prog.positive_semidefinite_constraints()[i] is not parsed as a PSD cone
+// constraint in the solver, then psd_y_start_indices[i] is std::nullopt. The
+// input should be an empty vector.
+// @param[out] lmi_y_start_indices y[lmi_y_start_indices[i]:
+// lmi_y_start_indices[i] + lmi_cone_length[i]] are the dual variable for
+// prog.linear_matrix_inequality_constraints()[i]. If
+// prog.linear_matrix_inequality_constraints()[i] is not parsed as a PSD cone
+// constraint in the solver, then lmi_y_start_indices[i] is std::nullopt. The
+// input should be an empty vector.
 void ParsePositiveSemidefiniteConstraints(
     const MathematicalProgram& prog, bool upper_triangular,
     std::vector<Eigen::Triplet<double>>* A_triplets, std::vector<double>* b,
-    int* A_row_count, std::vector<int>* psd_cone_length);
+    int* A_row_count, std::vector<std::optional<int>>* psd_cone_length,
+    std::vector<std::optional<int>>* lmi_cone_length,
+    std::vector<std::optional<int>>* psd_y_start_indices,
+    std::vector<std::optional<int>>* lmi_y_start_indices);
+
+// Similar to ParsePositiveSemidefiniteConstraints, but only parses the scalar
+// PSD constraint in prog.positive_semidefinite_constraint() and
+// prog.linear_matrix_inequality_constraints().
+// @param[out] scalar_psd_dual_indices scalar_psd_dual_indices[i] is the dual
+// variable index for prog.positive_semidefinite_constraints()[i]. It is
+// std::nullopt if the psd constraint is not on a scalar.
+// @param[out] scalar_lmi_dual_indices scalar_lmi_dual_indices[i] is the dual
+// variable index for prog.linear_matrix_inequality_constraints()[i]. It is
+// std::nullopt if the psd matrix is not a scalar.
+void ParseScalarPositiveSemidefiniteConstraints(
+    const MathematicalProgram& prog,
+    std::vector<Eigen::Triplet<double>>* A_triplets, std::vector<double>* b,
+    int* A_row_count, int* new_positive_cone_length,
+    std::vector<std::optional<int>>* scalar_psd_dual_indices,
+    std::vector<std::optional<int>>* scalar_lmi_dual_indices);
+
+// Similar to ParsePositiveSemidefiniteConstraints(), but ony parses the 2x2 PSD
+// constraints in prog.positive_semidefinite_constraints() and
+// prog.linear_matrix_inequality_constraints(). They are treated as second order
+// cone constraints.
+// @param[out] num_new_second_order_cones The number of new second order cones
+// to be imposed by all the 2x2 psd matrices in the
+// prog.positive_semidefinite_constraints() and
+// prog.linear_matrix_inequality_constraints().
+// @param[out] twobytwo_psd_dual_start_indices
+// twobytwo_psd_dual_start_indices[i] is the starting dual variable index for
+// prog.positive_semidefinite_constraints()[i]. It is std::nullopt if the psd
+// constraint is not on a 2x2 matrix.
+// @param[out] twobytwo_lmi_dual_start_indices
+// twobytwo_lmi_dual_start_indices[i] is the starting dual variable index for
+// prog.linear_matrix_inequality_constraints()[i]. It is std::nullopt if the psd
+// matrix is not a 2x2 matrix.
+void Parse2x2PositiveSemidefiniteConstraints(
+    const MathematicalProgram& prog,
+    std::vector<Eigen::Triplet<double>>* A_triplets, std::vector<double>* b,
+    int* A_row_count, int* num_new_second_order_cones,
+    std::vector<std::optional<int>>* twobytwo_psd_dual_start_indices,
+    std::vector<std::optional<int>>* twobytwo_lmi_dual_start_indices);
 }  // namespace internal
 }  // namespace solvers
 }  // namespace drake

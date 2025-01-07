@@ -49,6 +49,10 @@ GTEST_TEST(SoftMeshTest, TestCopyMoveAssignConstruct) {
     EXPECT_NE(&original.mesh(), &copy.mesh());
     EXPECT_NE(&original.pressure(), &copy.pressure());
     EXPECT_NE(&original.bvh(), &copy.bvh());
+    EXPECT_NE(&original.surface_mesh(), &copy.surface_mesh());
+    EXPECT_NE(&original.surface_mesh_bvh(), &copy.surface_mesh_bvh());
+    EXPECT_NE(&original.tri_to_tet(), &copy.tri_to_tet());
+    EXPECT_NE(&original.mesh_topology(), &copy.mesh_topology());
 
     EXPECT_TRUE(copy.mesh().Equal(original.mesh()));
 
@@ -61,6 +65,11 @@ GTEST_TEST(SoftMeshTest, TestCopyMoveAssignConstruct) {
     EXPECT_TRUE(copy_pressure.Equal(original_pressure));
 
     EXPECT_TRUE(copy.bvh().Equal(original.bvh()));
+
+    EXPECT_TRUE(copy.surface_mesh().Equal(original.surface_mesh()));
+    EXPECT_TRUE(copy.surface_mesh_bvh().Equal(original.surface_mesh_bvh()));
+    EXPECT_EQ(copy.tri_to_tet(), original.tri_to_tet());
+    EXPECT_TRUE(copy.mesh_topology().Equal(original.mesh_topology()));
   }
 
   // Test copy constructor.
@@ -71,6 +80,10 @@ GTEST_TEST(SoftMeshTest, TestCopyMoveAssignConstruct) {
     EXPECT_NE(&original.mesh(), &copy.mesh());
     EXPECT_NE(&original.pressure(), &copy.pressure());
     EXPECT_NE(&original.bvh(), &copy.bvh());
+    EXPECT_NE(&original.surface_mesh(), &copy.surface_mesh());
+    EXPECT_NE(&original.surface_mesh_bvh(), &copy.surface_mesh_bvh());
+    EXPECT_NE(&original.tri_to_tet(), &copy.tri_to_tet());
+    EXPECT_NE(&original.mesh_topology(), &copy.mesh_topology());
 
     EXPECT_TRUE(copy.mesh().Equal(original.mesh()));
 
@@ -83,6 +96,11 @@ GTEST_TEST(SoftMeshTest, TestCopyMoveAssignConstruct) {
     EXPECT_TRUE(copy_pressure.Equal(original_pressure));
 
     EXPECT_TRUE(copy.bvh().Equal(original.bvh()));
+
+    EXPECT_TRUE(copy.surface_mesh().Equal(original.surface_mesh()));
+    EXPECT_TRUE(copy.surface_mesh_bvh().Equal(original.surface_mesh_bvh()));
+    EXPECT_EQ(copy.tri_to_tet(), original.tri_to_tet());
+    EXPECT_TRUE(copy.mesh_topology().Equal(original.mesh_topology()));
   }
 
   // Test move constructor and move-assignment operator.
@@ -98,12 +116,22 @@ GTEST_TEST(SoftMeshTest, TestCopyMoveAssignConstruct) {
     const VolumeMeshFieldLinear<double, double>* const pressure_ptr =
         &start.pressure();
     const Bvh<Obb, VolumeMesh<double>>* const bvh_ptr = &start.bvh();
+    const TriangleSurfaceMesh<double>* const surface_mesh_ptr =
+        &start.surface_mesh();
+    const Bvh<Obb, TriangleSurfaceMesh<double>>* const surface_mesh_bvh_ptr =
+        &start.surface_mesh_bvh();
+    const std::vector<TetFace>* const tri_to_tet_ptr = &start.tri_to_tet();
+    const VolumeMeshTopology* const mesh_topology_ptr = &start.mesh_topology();
 
     // Test move constructor.
     SoftMesh move_constructed(std::move(start));
     EXPECT_EQ(&move_constructed.mesh(), mesh_ptr);
     EXPECT_EQ(&move_constructed.pressure(), pressure_ptr);
     EXPECT_EQ(&move_constructed.bvh(), bvh_ptr);
+    EXPECT_EQ(&move_constructed.surface_mesh(), surface_mesh_ptr);
+    EXPECT_EQ(&move_constructed.surface_mesh_bvh(), surface_mesh_bvh_ptr);
+    EXPECT_EQ(&move_constructed.tri_to_tet(), tri_to_tet_ptr);
+    EXPECT_EQ(&move_constructed.mesh_topology(), mesh_topology_ptr);
 
     // Test move-assignment operator.
     SoftMesh move_assigned;
@@ -111,6 +139,10 @@ GTEST_TEST(SoftMeshTest, TestCopyMoveAssignConstruct) {
     EXPECT_EQ(&move_assigned.mesh(), mesh_ptr);
     EXPECT_EQ(&move_assigned.pressure(), pressure_ptr);
     EXPECT_EQ(&move_assigned.bvh(), bvh_ptr);
+    EXPECT_EQ(&move_assigned.surface_mesh(), surface_mesh_ptr);
+    EXPECT_EQ(&move_assigned.surface_mesh_bvh(), surface_mesh_bvh_ptr);
+    EXPECT_EQ(&move_assigned.tri_to_tet(), tri_to_tet_ptr);
+    EXPECT_EQ(&move_assigned.mesh_topology(), mesh_topology_ptr);
   }
 }
 
@@ -122,6 +154,8 @@ GTEST_TEST(SoftMeshTest, TestCopyMoveAssignConstruct) {
 // std::variant and the move/copy semantics of the underlying data types
 // (already tested). If SoftGeometry changes its implementation details, this
 // logic would need to be revisited.
+// TODO(SeanCurtis-TRI): Clean up these tests to remove usage of legacy API
+// wrappers in SoftGeometry.
 GTEST_TEST(SoftGeometryTest, TestCopyMoveAssignConstruct) {
   const Sphere sphere(0.5);
   const double resolution_hint = 0.5;
@@ -132,6 +166,11 @@ GTEST_TEST(SoftGeometryTest, TestCopyMoveAssignConstruct) {
       MakeSpherePressureField(sphere, mesh.get(), hydroelastic_modulus));
 
   const SoftGeometry original(SoftMesh(std::move(mesh), std::move(pressure)));
+
+  // In all of the following tests we are only looking for evidence of
+  // copying/moving. Since SoftGeometry relies on the copy/move semantics of the
+  // underlying data types, we therefore do not check exhaustively for a deep
+  // copy.
 
   // Test copy-assignment operator.
   {
@@ -670,114 +709,106 @@ TEST_F(HydroelasticRigidGeometryTest, Ellipsoid) {
   }
 }
 
-// Confirm that a mesh type (convex/mesh) has a rigid representation. We rely
-// on the fact that we're loading a unit cube (vertices one unit away from the
-// origin along each axis) to confirm that the correct mesh got loaded. We also
-// confirm that the scale factor is included in the rigid representation.
-template <typename MeshType>
-void TestRigidMeshTypeFromObj(const std::string& file) {
+// Confirm that a mesh has a rigid representation. We rely on the fact that
+// we're loading a unit cube (vertices one unit away from the origin along each
+// axis) to confirm that the correct mesh got loaded. We also confirm that the
+// scale factor is included in the rigid representation.
+void TestRigidMeshCube(const Mesh& mesh) {
   // Empty props since its contents do not matter.
   ProximityProperties props;
 
   constexpr double kEps = 2 * std::numeric_limits<double>::epsilon();
 
-  for (const double scale : {1.0, 5.1, 0.4}) {
-    std::optional<RigidGeometry> geometry =
-        MakeRigidRepresentation(MeshType(file, scale), props);
-    ASSERT_NE(geometry, std::nullopt);
-    ASSERT_FALSE(geometry->is_half_space());
+  // Non-unit scale to make sure scale is being accounted for.
+  std::optional<RigidGeometry> geometry = MakeRigidRepresentation(mesh, props);
+  ASSERT_NE(geometry, std::nullopt);
+  ASSERT_FALSE(geometry->is_half_space());
 
-    // We only check that the obj file was read by verifying the number of
-    // vertices and triangles, which depend on the specific content of
-    // the obj file.
-    const TriangleSurfaceMesh<double>& surface_mesh = geometry->mesh();
-    EXPECT_EQ(surface_mesh.num_vertices(), 8);
-    EXPECT_EQ(surface_mesh.num_triangles(), 12);
+  // We only check that the obj file was read by verifying the number of
+  // vertices and triangles, which depend on the specific content of
+  // the obj file.
+  const TriangleSurfaceMesh<double>& surface_mesh = geometry->mesh();
+  EXPECT_EQ(surface_mesh.num_vertices(), 8);
+  EXPECT_EQ(surface_mesh.num_triangles(), 12);
 
-    // The scale factor multiplies the measure of every vertex position, so
-    // the expected distance of the vertex to the origin should be:
-    // scale * sqrt(3) (because the original mesh was the unit sphere).
-    const double expected_dist = std::sqrt(3) * scale;
-    for (int v = 0; v < surface_mesh.num_vertices(); ++v) {
-      const double dist = surface_mesh.vertex(v).norm();
-      ASSERT_NEAR(dist, expected_dist, scale * kEps)
-          << "for scale: " << scale << " at vertex " << v;
-    }
+  // The scale factor multiplies the measure of every vertex position, so
+  // the expected distance of the vertex to the origin should be:
+  // scale * sqrt(3) (because the original mesh was the unit sphere).
+  const double expected_dist = std::sqrt(3) * mesh.scale();
+  for (int v = 0; v < surface_mesh.num_vertices(); ++v) {
+    const double dist = surface_mesh.vertex(v).norm();
+    ASSERT_NEAR(dist, expected_dist, mesh.scale() * kEps)
+        << "for scale: " << mesh.scale() << " at vertex " << v;
   }
 }
 
 // Confirm support for a rigid Mesh. Tests that a hydroelastic representation
 // is made.
 TEST_F(HydroelasticRigidGeometryTest, Mesh) {
-  const std::string file_lower_case =
+  // We just want a non-unit scale.
+  constexpr double kScale = 0.75;
+  const std::string obj_path =
       FindResourceOrThrow("drake/geometry/test/quad_cube.obj");
+  const std::string vtk_path =
+      FindResourceOrThrow("drake/geometry/test/cube_as_volume.vtk");
   {
-    SCOPED_TRACE("Rigid Mesh, lower-case obj extension");
-    TestRigidMeshTypeFromObj<Mesh>(file_lower_case);
+    SCOPED_TRACE("Rigid Mesh, on-disk obj");
+    TestRigidMeshCube(Mesh(obj_path, kScale));
   }
   {
-    SCOPED_TRACE("Rigid Mesh, upper-case OBJ extension");
-    const std::string file_upper_case = temp_directory() + "/quad_cube.OBJ";
-    std::filesystem::copy(file_lower_case, file_upper_case);
-    TestRigidMeshTypeFromObj<Mesh>(file_upper_case);
+    SCOPED_TRACE("Rigid Mesh, on-disk vtk");
+    TestRigidMeshCube(Mesh(vtk_path, kScale));
+  }
+  {
+    SCOPED_TRACE("Rigid Mesh, in-memory vtk");
+    TestRigidMeshCube(Mesh(InMemoryMesh{MemoryFile::Make(vtk_path)}, kScale));
   }
   {
     SCOPED_TRACE("Rigid Mesh, unsupported extension");
-    DRAKE_EXPECT_THROWS_MESSAGE(TestRigidMeshTypeFromObj<Mesh>("invalid.stl"),
+    DRAKE_EXPECT_THROWS_MESSAGE(TestRigidMeshCube(Mesh("invalid.stl", kScale)),
                                 ".*Mesh shapes can only use .*invalid.stl");
   }
 }
 
-// Confirm support for a rigid Convex. Tests that a hydroelastic representation
-// is made.
+// Confirm that Convex shapes have a rigid representation based on their convex
+// hull.
 TEST_F(HydroelasticRigidGeometryTest, Convex) {
+  auto expect_convex_cube = [](const std::string& file) {
+    const Convex convex(file, 1.0);
+    // Empty properties since its contents do not matter.
+    const std::optional<RigidGeometry> geometry =
+        MakeRigidRepresentation(convex, ProximityProperties());
+    ASSERT_NE(geometry, std::nullopt);
+    ASSERT_FALSE(geometry->is_half_space());
+
+    // The surface mesh should be a triangulated cube.
+    const TriangleSurfaceMesh<double>& surface_mesh = geometry->mesh();
+    EXPECT_EQ(surface_mesh.num_vertices(), 8);
+    EXPECT_EQ(surface_mesh.num_triangles(), 12);
+  };
+
   {
     SCOPED_TRACE("Rigid Convex from Obj file");
-    std::string file = FindResourceOrThrow("drake/geometry/test/quad_cube.obj");
-    TestRigidMeshTypeFromObj<Convex>(file);
+    const std::string file =
+        FindResourceOrThrow("drake/geometry/test/cube_with_hole.obj");
+    expect_convex_cube(file);
   }
 
   {
-    SCOPED_TRACE("Rigid Convex from VTK file");
-    std::string file =
-        FindResourceOrThrow("drake/geometry/test/one_tetrahedron.vtk");
-    // Empty props since its contents do not matter.
-    const ProximityProperties props;
-    std::optional<RigidGeometry> geometry =
-        MakeRigidRepresentation(Convex(file), props);
-    ASSERT_NE(geometry, std::nullopt);
-    const TriangleSurfaceMesh<double>& surface_mesh = geometry->mesh();
-    EXPECT_EQ(surface_mesh.num_vertices(), 4);
-    EXPECT_EQ(surface_mesh.num_triangles(), 4);
+    SCOPED_TRACE("Rigid Convex from glTF file");
+    const std::string file =
+        FindResourceOrThrow("drake/geometry/test/cube_with_hole.gltf");
+    expect_convex_cube(file);
   }
 
-  {
-    SCOPED_TRACE("Rigid Convex, unsupported extension");
-    DRAKE_EXPECT_THROWS_MESSAGE(TestRigidMeshTypeFromObj<Convex>("invalid.stl"),
-                                ".*Convex shapes can only use .*invalid.stl");
-  }
-}
+  // TODO(SeanCurtis-TRI): Create cube_with_hole.vtk to complete the set. It's
+  // not urgent, because, ultimately, support for glTF implies that the
+  // underlying code is using Convex::GetConvexHull() and *that* has already
+  // been unit tested with tetrahedral .vtk.
 
-TEST_F(HydroelasticRigidGeometryTest, MeshFromVtk) {
-  const std::string file_lower_case =
-      FindResourceOrThrow("drake/geometry/test/non_convex_mesh.vtk");
-  const std::string file_upper_case = temp_directory() + "/non_convex_mesh.VTK";
-  std::filesystem::copy(file_lower_case, file_upper_case);
-  // Empty props since its contents do not matter.
-  const ProximityProperties props;
-  for (const std::string& file_name : {file_lower_case, file_upper_case}) {
-    SCOPED_TRACE(file_name);
-    std::optional<RigidGeometry> geometry =
-        MakeRigidRepresentation(Mesh(file_name), props);
-    ASSERT_NE(geometry, std::nullopt);
-
-    // We only check that the vtk file was read by verifying the number of
-    // vertices and triangles, which depend on the specific content of
-    // the vtk file.
-    const TriangleSurfaceMesh<double>& surface_mesh = geometry->mesh();
-    EXPECT_EQ(surface_mesh.num_vertices(), 5);
-    EXPECT_EQ(surface_mesh.num_triangles(), 6);
-  }
+  // No need to test *this* API against unsupported file types; that will be
+  // handled by the under-the-hood convex hull computation. Hydroelastics
+  // doesn't care about the mesh file, just that a convex hull is available.
 }
 
 // Template magic to instantiate a particular kind of shape at compile time.
@@ -973,6 +1004,11 @@ TEST_F(HydroelasticSoftGeometryTest, HalfSpace) {
   EXPECT_EQ(half_space->pressure_scale(),
             properties.GetProperty<double>(kHydroGroup, kElastic) / thickness);
 
+  DRAKE_EXPECT_NO_THROW(half_space->soft_half_space());
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      half_space->soft_mesh(),
+      "SoftGeometry::soft_mesh.* cannot be invoked for soft half space.*");
+
   DRAKE_EXPECT_THROWS_MESSAGE(
       half_space->mesh(),
       "SoftGeometry::mesh.* cannot be invoked .* half space");
@@ -1006,6 +1042,12 @@ TEST_F(HydroelasticSoftGeometryTest, Sphere) {
   // This is the only test where we confirm that bvh() *doesn't* throw for
   // meshes and slab_thickness() does.
   EXPECT_NO_THROW(sphere1->bvh());
+
+  DRAKE_EXPECT_NO_THROW(sphere1->soft_mesh());
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      sphere1->soft_half_space(),
+      "SoftGeometry::soft_half_space.* cannot be invoked for soft mesh.*");
+
   DRAKE_EXPECT_THROWS_MESSAGE(
       sphere1->pressure_scale(),
       "SoftGeometry::pressure_scale.* cannot be invoked .* soft mesh");
@@ -1049,7 +1091,7 @@ TEST_F(HydroelasticSoftGeometryTest, Sphere) {
     // of two --> sphere 2's level of refinement is one greater than sphere
     // 1's. Both are missing the "tessellation_strategy" property so it should
     // default to kSingleInteriorVertex. So, sphere 2 must have 4X the
-    // tetrahedra as sphere 1.
+    // tetrahedra and surface faces as sphere 1.
     EXPECT_EQ(sphere1->mesh().num_elements() * 4,
               sphere2->mesh().num_elements());
   }
@@ -1059,7 +1101,7 @@ TEST_F(HydroelasticSoftGeometryTest, Sphere) {
     // of tets (compared to an otherwise identical mesh declared to sparse).
 
     // Starting with sphere 1's properties, we'll set it to dense and observe
-    // more tets.
+    // more tets but the same amount of surface faces.
     ProximityProperties dense_properties(properties1);
     dense_properties.AddProperty(kHydroGroup, "tessellation_strategy",
                                  TessellationStrategy::kDenseInteriorVertices);
@@ -1265,24 +1307,31 @@ TEST_F(HydroelasticSoftGeometryTest, Convex) {
 }
 
 // Test construction of a compliant (generally non-convex) tetrahedral mesh.
+// Test against both on-disk and in-memory vtk file. All other mesh types simply
+// default to computation of its convex hull which has been tested as part
+// of the Mesh API against in-memory and on-disk data.
 TEST_F(HydroelasticSoftGeometryTest, Mesh) {
-  const Mesh mesh_specification(
-      FindResourceOrThrow("drake/geometry/test/non_convex_mesh.vtk"));
+  const std::string path =
+      FindResourceOrThrow("drake/geometry/test/non_convex_mesh.vtk");
+  const std::vector<Mesh> meshes{Mesh(path),
+                                 Mesh(InMemoryMesh{MemoryFile::Make(path)})};
+  for (const Mesh& mesh_specification : meshes) {
+    ProximityProperties properties = soft_properties();
+    std::optional<SoftGeometry> compliant_geometry =
+        MakeSoftRepresentation(mesh_specification, properties);
 
-  ProximityProperties properties = soft_properties();
-  std::optional<SoftGeometry> compliant_geometry =
-      MakeSoftRepresentation(mesh_specification, properties);
-
-  // Smoke test the mesh and the pressure field. It relies on unit tests for
-  // the generators of the mesh and the pressure field.
-  const int expected_num_vertices = 6;
-  EXPECT_EQ(compliant_geometry->mesh().num_vertices(), expected_num_vertices);
-  const double E = properties.GetPropertyOrDefault(kHydroGroup, kElastic, 1e8);
-  for (int v = 0; v < compliant_geometry->mesh().num_vertices(); ++v) {
-    const double pressure =
-        compliant_geometry->pressure_field().EvaluateAtVertex(v);
-    EXPECT_GE(pressure, 0);
-    EXPECT_LE(pressure, E);
+    // Smoke test the mesh and the pressure field. It relies on unit tests for
+    // the generators of the mesh and the pressure field.
+    const int expected_num_vertices = 6;
+    EXPECT_EQ(compliant_geometry->mesh().num_vertices(), expected_num_vertices);
+    const double E =
+        properties.GetPropertyOrDefault(kHydroGroup, kElastic, 1e8);
+    for (int v = 0; v < compliant_geometry->mesh().num_vertices(); ++v) {
+      const double pressure =
+          compliant_geometry->pressure_field().EvaluateAtVertex(v);
+      EXPECT_GE(pressure, 0);
+      EXPECT_LE(pressure, E);
+    }
   }
 }
 

@@ -40,15 +40,31 @@ struct IpoptSolverDetails {
   const char* ConvertStatusToString() const;
 };
 
+/**
+ * A wrapper to call
+ * <a href="https://coin-or.github.io/Ipopt/">Ipopt</a>
+ * using Drake's MathematicalProgram.
+ *
+ * @warning Setting the Ipopt option "linear_solver" to "mumps" is deprecated
+ * and will be removed on or after 2025-05-01. Using MUMPS is NOT threadsafe
+ * (see https://github.com/coin-or/Ipopt/issues/733).
+ */
 class IpoptSolver final : public SolverBase {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(IpoptSolver)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(IpoptSolver);
 
   /// Type of details stored in MathematicalProgramResult.
   using Details = IpoptSolverDetails;
 
   IpoptSolver();
   ~IpoptSolver() final;
+
+  // Remove on 2025-05-01.
+  /// Changes the default value for Ipopt's "linerar_solver" solver option. This
+  /// is the lowest precedence default -- setting the "linear_solver" option in
+  /// SolverOptions will override this default.
+  /// @experimental
+  void SetDefaultLinearSolver(std::string linear_solver);
 
   /// @name Static versions of the instance methods with similar names.
   //@{
@@ -62,8 +78,12 @@ class IpoptSolver final : public SolverBase {
   using SolverBase::Solve;
 
  private:
-  void DoSolve(const MathematicalProgram&, const Eigen::VectorXd&,
-               const SolverOptions&, MathematicalProgramResult*) const final;
+  void DoSolve2(const MathematicalProgram&, const Eigen::VectorXd&,
+                internal::SpecificOptions*,
+                MathematicalProgramResult*) const final;
+
+  // Remove 2025-05-01.
+  std::string default_linear_solver_;
 };
 
 }  // namespace solvers

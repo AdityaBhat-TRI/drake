@@ -2,7 +2,6 @@
 
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/math/rigid_transform.h"
 #include "drake/multibody/contact_solvers/sap/sap_contact_problem.h"
 #include "drake/multibody/contact_solvers/sap/sap_pd_controller_constraint.h"
@@ -32,23 +31,6 @@ using Configuration = SapPdControllerConstraint<double>::Configuration;
 
 namespace drake {
 namespace multibody {
-
-namespace contact_solvers {
-namespace internal {
-// N.B. What namespace this operator is in is important for ADL.
-bool operator==(const Configuration& a, const Configuration& b) {
-  if (a.clique != b.clique) return false;
-  if (a.clique_dof != b.clique_dof) return false;
-  if (a.clique_nv != b.clique_nv) return false;
-  if (a.q0 != b.q0) return false;
-  if (a.qd != b.qd) return false;
-  if (a.vd != b.vd) return false;
-  if (a.u0 != b.u0) return false;
-  return true;
-}
-}  // namespace internal
-}  // namespace contact_solvers
-
 namespace internal {
 
 // Friend class used to provide access to a selection of private functions in
@@ -69,12 +51,10 @@ namespace kcov339_avoidance_magic {
 class ActuatedIiiwaArmTest : public ::testing::Test {
  public:
   void SetUp() override {
-    const char kArmSdfPath[] =
-        "drake/manipulation/models/iiwa_description/sdf/"
-        "iiwa14_no_collision.sdf";
-
-    const char kWsg50SdfPath[] =
-        "drake/manipulation/models/wsg_50_description/sdf/schunk_wsg_50.sdf";
+    const char kArmSdfUrl[] =
+        "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf";
+    const char kWsg50SdfUrl[] =
+        "package://drake_models/wsg_50_description/sdf/schunk_wsg_50.sdf";
 
     // Make a discrete model.
     plant_ = std::make_unique<MultibodyPlant<double>>(0.01 /* update period */);
@@ -86,10 +66,10 @@ class ActuatedIiiwaArmTest : public ::testing::Test {
     Parser parser(plant_.get());
 
     // Add the arm.
-    arm_model_ = parser.AddModels(FindResourceOrThrow(kArmSdfPath)).at(0);
+    arm_model_ = parser.AddModelsFromUrl(kArmSdfUrl).at(0);
 
     // Add the gripper.
-    gripper_model_ = parser.AddModels(FindResourceOrThrow(kWsg50SdfPath)).at(0);
+    gripper_model_ = parser.AddModelsFromUrl(kWsg50SdfUrl).at(0);
 
     const auto& base_body = plant_->GetBodyByName("iiwa_link_0", arm_model_);
     const auto& end_effector = plant_->GetBodyByName("iiwa_link_7", arm_model_);
@@ -113,8 +93,8 @@ class ActuatedIiiwaArmTest : public ::testing::Test {
   }
 
   void SetGripperModel() {
-    for (JointActuatorIndex actuator_index(0);
-         actuator_index < plant_->num_actuators(); ++actuator_index) {
+    for (JointActuatorIndex actuator_index :
+         plant_->GetJointActuatorIndices()) {
       JointActuator<double>& actuator =
           plant_->get_mutable_joint_actuator(actuator_index);
       if (actuator.model_instance() == gripper_model_) {
@@ -148,7 +128,7 @@ TEST_F(ActuatedIiiwaArmTest, VerifyConstraints) {
 
   // Sanity check we only defined PD controllers for the grippers DOFs.
   int num_controlled_actuators = 0;
-  for (JointActuatorIndex a(0); a < plant_->num_actuators(); ++a) {
+  for (JointActuatorIndex a : plant_->GetJointActuatorIndices()) {
     const JointActuator<double>& actuator = plant_->get_joint_actuator(a);
     if (actuator.has_controller()) ++num_controlled_actuators;
   }

@@ -22,24 +22,26 @@ const boolean<T> is_nonnegative_finite(const T& value) {
   return isfinite(value) && value >= 0;
 }
 
-template<typename T>
+template <typename T>
 void ThrowUnlessValueIsPositiveFinite(const T& value,
-    std::string_view value_name, std::string_view function_name) {
+                                      std::string_view value_name,
+                                      std::string_view function_name) {
   if (!is_positive_finite(value)) {
     DRAKE_DEMAND(!value_name.empty());
     DRAKE_DEMAND(!function_name.empty());
-    const std::string error_message = fmt::format(
-    "{}(): {} is not positive and finite: {}.",
-    function_name, value_name, value);
-  throw std::logic_error(error_message);
+    const std::string error_message =
+        fmt::format("{}(): {} is not positive and finite: {}.", function_name,
+                    value_name, value);
+    throw std::logic_error(error_message);
   }
 }
 
 }  // namespace
 
 template <typename T>
-SpatialInertia<T> SpatialInertia<T>::MakeFromCentralInertia(const T& mass,
-    const Vector3<T>& p_PScm_E, const RotationalInertia<T>& I_SScm_E) {
+SpatialInertia<T> SpatialInertia<T>::MakeFromCentralInertia(
+    const T& mass, const Vector3<T>& p_PScm_E,
+    const RotationalInertia<T>& I_SScm_E) {
   UnitInertia<T> G_SScm_E;
   G_SScm_E.SetFromRotationalInertia(I_SScm_E, mass);
   // The next line checks that M_SScm_E is physically valid.
@@ -56,8 +58,8 @@ SpatialInertia<T> SpatialInertia<T>::MakeUnitary() {
 }
 
 template <typename T>
-SpatialInertia<T> SpatialInertia<T>::PointMass(
-    const T& mass, const Vector3<T>& position) {
+SpatialInertia<T> SpatialInertia<T>::PointMass(const T& mass,
+                                               const Vector3<T>& position) {
   ThrowUnlessValueIsPositiveFinite(mass, "mass", __func__);
 
   // Upgrade to monogram notation: position is the position vector from
@@ -72,8 +74,10 @@ SpatialInertia<T> SpatialInertia<T>::PointMass(
 }
 
 template <typename T>
-SpatialInertia<T> SpatialInertia<T>::SolidBoxWithDensity(
-    const T& density, const T& lx, const T& ly, const T& lz) {
+SpatialInertia<T> SpatialInertia<T>::SolidBoxWithDensity(const T& density,
+                                                         const T& lx,
+                                                         const T& ly,
+                                                         const T& lz) {
   ThrowUnlessValueIsPositiveFinite(density, "density", __func__);
   ThrowUnlessValueIsPositiveFinite(lx, "x-length", __func__);
   ThrowUnlessValueIsPositiveFinite(ly, "y-length", __func__);
@@ -84,8 +88,9 @@ SpatialInertia<T> SpatialInertia<T>::SolidBoxWithDensity(
 }
 
 template <typename T>
-SpatialInertia<T> SpatialInertia<T>::SolidBoxWithMass(
-    const T& mass, const T& lx, const T& ly, const T& lz) {
+SpatialInertia<T> SpatialInertia<T>::SolidBoxWithMass(const T& mass,
+                                                      const T& lx, const T& ly,
+                                                      const T& lz) {
   ThrowUnlessValueIsPositiveFinite(mass, "mass", __func__);
   ThrowUnlessValueIsPositiveFinite(lx, "x-length", __func__);
   ThrowUnlessValueIsPositiveFinite(ly, "y-length", __func__);
@@ -96,8 +101,8 @@ SpatialInertia<T> SpatialInertia<T>::SolidBoxWithMass(
 }
 
 template <typename T>
-SpatialInertia<T> SpatialInertia<T>::SolidCubeWithDensity(
-    const T& density, const T& length) {
+SpatialInertia<T> SpatialInertia<T>::SolidCubeWithDensity(const T& density,
+                                                          const T& length) {
   ThrowUnlessValueIsPositiveFinite(density, "density", __func__);
   ThrowUnlessValueIsPositiveFinite(length, "length", __func__);
   const T volume = length * length * length;
@@ -106,8 +111,8 @@ SpatialInertia<T> SpatialInertia<T>::SolidCubeWithDensity(
 }
 
 template <typename T>
-SpatialInertia<T> SpatialInertia<T>::SolidCubeWithMass(
-    const T& mass, const T& length) {
+SpatialInertia<T> SpatialInertia<T>::SolidCubeWithMass(const T& mass,
+                                                       const T& length) {
   ThrowUnlessValueIsPositiveFinite(mass, "mass", __func__);
   ThrowUnlessValueIsPositiveFinite(length, "length", __func__);
   const Vector3<T> p_BoBcm_B = Vector3<T>::Zero();
@@ -205,8 +210,7 @@ SpatialInertia<T> SpatialInertia<T>::ThinRodWithMass(
   ThrowUnlessValueIsPositiveFinite(mass, "mass", __func__);
   ThrowUnlessValueIsPositiveFinite(length, "length", __func__);
   math::internal::ThrowIfNotUnitVector(unit_vector, __func__);
-  const UnitInertia<T> G_BBcm_B =
-      UnitInertia<T>::ThinRod(length, unit_vector);
+  const UnitInertia<T> G_BBcm_B = UnitInertia<T>::ThinRod(length, unit_vector);
   const Vector3<T> p_BoBcm_B = Vector3<T>::Zero();
   return SpatialInertia<T>(mass, p_BoBcm_B, G_BBcm_B);
 }
@@ -225,8 +229,10 @@ SpatialInertia<T> SpatialInertia<T>::ThinRodWithMassAboutEnd(
 }
 
 template <typename T>
-SpatialInertia<T> SpatialInertia<T>::SolidEllipsoidWithDensity(
-    const T& density, const T& a, const T& b, const T& c) {
+SpatialInertia<T> SpatialInertia<T>::SolidEllipsoidWithDensity(const T& density,
+                                                               const T& a,
+                                                               const T& b,
+                                                               const T& c) {
   ThrowUnlessValueIsPositiveFinite(density, "density", __func__);
   ThrowUnlessValueIsPositiveFinite(a, "semi-axis a", __func__);
   ThrowUnlessValueIsPositiveFinite(b, "semi-axis b", __func__);
@@ -237,8 +243,10 @@ SpatialInertia<T> SpatialInertia<T>::SolidEllipsoidWithDensity(
 }
 
 template <typename T>
-SpatialInertia<T> SpatialInertia<T>::SolidEllipsoidWithMass(
-    const T& mass, const T& a, const T& b, const T& c) {
+SpatialInertia<T> SpatialInertia<T>::SolidEllipsoidWithMass(const T& mass,
+                                                            const T& a,
+                                                            const T& b,
+                                                            const T& c) {
   ThrowUnlessValueIsPositiveFinite(mass, "mass", __func__);
   ThrowUnlessValueIsPositiveFinite(a, "semi-axis a", __func__);
   ThrowUnlessValueIsPositiveFinite(b, "semi-axis b", __func__);
@@ -249,8 +257,8 @@ SpatialInertia<T> SpatialInertia<T>::SolidEllipsoidWithMass(
 }
 
 template <typename T>
-SpatialInertia<T> SpatialInertia<T>::SolidSphereWithDensity(
-    const T& density, const T& radius) {
+SpatialInertia<T> SpatialInertia<T>::SolidSphereWithDensity(const T& density,
+                                                            const T& radius) {
   ThrowUnlessValueIsPositiveFinite(density, "density", __func__);
   ThrowUnlessValueIsPositiveFinite(radius, "radius", __func__);
   const T volume = (4.0 / 3.0) * M_PI * radius * radius * radius;  // 4/3 π r³
@@ -259,8 +267,8 @@ SpatialInertia<T> SpatialInertia<T>::SolidSphereWithDensity(
 }
 
 template <typename T>
-SpatialInertia<T> SpatialInertia<T>::SolidSphereWithMass(
-    const T& mass, const T& radius) {
+SpatialInertia<T> SpatialInertia<T>::SolidSphereWithMass(const T& mass,
+                                                         const T& radius) {
   ThrowUnlessValueIsPositiveFinite(mass, "mass", __func__);
   ThrowUnlessValueIsPositiveFinite(radius, "radius", __func__);
   const Vector3<T> p_BoBcm_B = Vector3<T>::Zero();
@@ -279,8 +287,8 @@ SpatialInertia<T> SpatialInertia<T>::HollowSphereWithDensity(
 }
 
 template <typename T>
-SpatialInertia<T> SpatialInertia<T>::HollowSphereWithMass(
-    const T& mass, const T& radius) {
+SpatialInertia<T> SpatialInertia<T>::HollowSphereWithMass(const T& mass,
+                                                          const T& radius) {
   ThrowUnlessValueIsPositiveFinite(mass, "mass", __func__);
   ThrowUnlessValueIsPositiveFinite(radius, "radius", __func__);
   const Vector3<T> p_BoBcm_B = Vector3<T>::Zero();
@@ -303,8 +311,8 @@ SpatialInertia<T> SpatialInertia<T>::SolidTetrahedronAboutPointWithDensity(
 
   // Form B's spatial inertia about vertex B0 and then shifts to point A.
   SpatialInertia<T> M_BB0 =
-      SpatialInertia<T>::SolidTetrahedronAboutVertexWithDensity(
-          density, p_B0B1, p_B0B2, p_B0B3);
+      SpatialInertia<T>::SolidTetrahedronAboutVertexWithDensity(density, p_B0B1,
+                                                                p_B0B2, p_B0B3);
   const Vector3<T>& p_AB0 = p0;  // Alias for position from point A to B0.
   M_BB0.ShiftInPlace(-p_AB0);
   return M_BB0;  // Since M_BB0 was shifted, this actually returns M_BA.
@@ -344,18 +352,31 @@ boolean<T> SpatialInertia<T>::IsPhysicallyValid() const {
 }
 
 template <typename T>
-void SpatialInertia<T>::ThrowNotPhysicallyValid() const {
-  std::string error_message = fmt::format(
-          "Spatial inertia fails SpatialInertia::IsPhysicallyValid().");
+std::string SpatialInertia<T>::CriticizeNotPhysicallyValid() const {
+  if (IsPhysicallyValid()) {
+    return {};
+  }
+  return MakeNotPhysicallyValidErrorMessage();
+}
+
+template <typename T>
+std::string SpatialInertia<T>::MakeNotPhysicallyValidErrorMessage() const {
+  std::string error_message =
+      fmt::format("Spatial inertia fails SpatialInertia::IsPhysicallyValid().");
   const T& mass = get_mass();
   if (!is_positive_finite(mass)) {
-      error_message += fmt::format(
-          "\nmass = {} is not positive and finite.\n", mass);
+    error_message +=
+        fmt::format("\nmass = {} is not positive and finite.\n", mass);
   } else {
     error_message += fmt::format("{}", *this);
     WriteExtraCentralInertiaProperties(&error_message);
   }
-  throw std::runtime_error(error_message);
+  return error_message;
+}
+
+template <typename T>
+void SpatialInertia<T>::ThrowNotPhysicallyValid() const {
+  throw std::runtime_error(MakeNotPhysicallyValidErrorMessage());
 }
 
 template <typename T>
@@ -379,39 +400,40 @@ SpatialInertia<T>& SpatialInertia<T>::operator+=(
 }
 
 template <typename T>
-SpatialInertia<T>& SpatialInertia<T>::ShiftFromCenterOfMassInPlace(
+void SpatialInertia<T>::ShiftFromCenterOfMassInPlace(
     const Vector3<T>& p_ScmP_E) {
   DRAKE_ASSERT(p_PScm_E_ == Vector3<T>::Zero());
   G_SP_E_.ShiftFromCenterOfMassInPlace(p_ScmP_E);
   p_PScm_E_ = -p_ScmP_E;
-  return *this;  // On entry, `this` is M_SScm_E. On return, `this` is M_SP_E.
+  // On entry, `this` is M_SScm_E. On return, `this` is M_SP_E.
 }
 
 template <typename T>
 SpatialInertia<T> SpatialInertia<T>::ShiftFromCenterOfMass(
     const Vector3<T>& p_ScmP_E) const {
-  return SpatialInertia(*this).ShiftFromCenterOfMassInPlace(p_ScmP_E);
+  SpatialInertia result(*this);
+  result.ShiftFromCenterOfMassInPlace(p_ScmP_E);
+  return result;
 }
 
 template <typename T>
-SpatialInertia<T>& SpatialInertia<T>::ShiftToCenterOfMassInPlace() {
+void SpatialInertia<T>::ShiftToCenterOfMassInPlace() {
   G_SP_E_.ShiftToCenterOfMassInPlace(p_PScm_E_);
   p_PScm_E_ = Vector3<T>::Zero();
-  return *this;  // On entry, `this` is M_SP_E. On return, `this` is M_SScm_E.
+  // On entry, `this` is M_SP_E. On return, `this` is M_SScm_E.
 }
 
 template <typename T>
-SpatialInertia<T>& SpatialInertia<T>::ShiftInPlace(const Vector3<T>& p_PQ_E) {
+void SpatialInertia<T>::ShiftInPlace(const Vector3<T>& p_PQ_E) {
   const Vector3<T> p_QScm_E = p_PScm_E_ - p_PQ_E;
   // The following two lines apply the parallel axis theorem (in place) so that:
   //  G_SQ = G_SP + px_QScm² - px_PScm²
   G_SP_E_.ShiftFromCenterOfMassInPlace(p_QScm_E);
   G_SP_E_.ShiftToCenterOfMassInPlace(p_PScm_E_);
   p_PScm_E_ = p_QScm_E;
-  // Note: It would be a implementation bug if a shift starts with a valid
+  // Note: It would be an implementation bug if a shift starts with a valid
   // spatial inertia and the shift produces an invalid spatial inertia.
   // Hence, no need to use DRAKE_ASSERT_VOID(CheckInvariants()).
-  return *this;
 }
 
 template <typename T>
@@ -419,17 +441,17 @@ SpatialForce<T> SpatialInertia<T>::operator*(
     const SpatialAcceleration<T>& A_WB_E) const {
   const Vector3<T>& alpha_WB_E = A_WB_E.rotational();
   const Vector3<T>& a_WBo_E = A_WB_E.translational();
-  const Vector3<T>& mp_BoBcm_E = CalcComMoment();  // = m * p_BoBcm
   // Return (see class's documentation):
   // ⌈ tau_Bo_E ⌉   ⌈    I_Bo_E     | m * p_BoBcm× ⌉   ⌈ alpha_WB_E ⌉
   // |          | = |               |              | * |            |
   // ⌊  f_Bo_E  ⌋   ⌊ -m * p_BoBcm× |   m * Id     ⌋   ⌊  a_WBo_E   ⌋
   return SpatialForce<T>(
-      /* rotational */
-      CalcRotationalInertia() * alpha_WB_E + mp_BoBcm_E.cross(a_WBo_E),
-      /* translational: notice the order of the cross product is the reversed
-       * of the documentation above and thus no minus sign is needed. */
-      alpha_WB_E.cross(mp_BoBcm_E) + get_mass() * a_WBo_E);
+      // Note: p_PScm_E here is p_BoBcm in the above notation.
+      // Rotational
+      mass_ * (G_SP_E_ * alpha_WB_E + p_PScm_E_.cross(a_WBo_E)),
+      // Translational: notice the order of the cross product is the reversed
+      // of the documentation above and thus no minus sign is needed.
+      mass_ * (alpha_WB_E.cross(p_PScm_E_) + a_WBo_E));
 }
 
 template <typename T>
@@ -437,17 +459,17 @@ SpatialMomentum<T> SpatialInertia<T>::operator*(
     const SpatialVelocity<T>& V_WBp_E) const {
   const Vector3<T>& w_WB_E = V_WBp_E.rotational();
   const Vector3<T>& v_WP_E = V_WBp_E.translational();
-  const Vector3<T>& mp_BoBcm_E = CalcComMoment();  // = m * p_BoBcm
   // Return (see class's documentation):
   // ⌈ h_WB  ⌉   ⌈     I_Bp      | m * p_BoBcm× ⌉   ⌈ w_WB ⌉
   // |       | = |               |              | * |      |
   // ⌊ l_WBp ⌋   ⌊ -m * p_BoBcm× |   m * Id     ⌋   ⌊ v_WP ⌋
   return SpatialMomentum<T>(
+      // Note: p_PScm_E here is p_BoBcm in the above notation.
       // Rotational
-      CalcRotationalInertia() * w_WB_E + mp_BoBcm_E.cross(v_WP_E),
+      mass_ * (G_SP_E_ * w_WB_E + p_PScm_E_.cross(v_WP_E)),
       // Translational: notice the order of the cross product is the reversed
       // of the documentation above and thus no minus sign is needed.
-      w_WB_E.cross(mp_BoBcm_E) + get_mass() * v_WP_E);
+      mass_ * (w_WB_E.cross(p_PScm_E_) + v_WP_E));
 }
 
 template <typename T>
@@ -530,8 +552,8 @@ void SpatialInertia<T>::WriteExtraCentralInertiaProperties(
   const Vector3<T>& p_PBcm = get_com();
   const boolean<T> is_position_zero = (p_PBcm == Vector3<T>::Zero());
   if (!is_position_zero) {
-    *message += fmt::format(
-        " Inertia about center of mass, I_BBcm =\n{}", I_BBcm);
+    *message +=
+        fmt::format(" Inertia about center of mass, I_BBcm =\n{}", I_BBcm);
   }
 
   // Write B's principal moments of inertia about Bcm.
@@ -540,7 +562,8 @@ void SpatialInertia<T>::WriteExtraCentralInertiaProperties(
     const double Imin = eig(0), Imed = eig(1), Imax = eig(2);
     *message += fmt::format(
         " Principal moments of inertia about Bcm (center of mass) ="
-        "\n[{}  {}  {}]\n", Imin, Imed, Imax);
+        "\n[{}  {}  {}]\n",
+        Imin, Imed, Imax);
   }
 }
 
@@ -581,13 +604,15 @@ std::ostream& operator<<(std::ostream& out, const SpatialInertia<T>& M) {
   return out;
 }
 
-DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS((
-    static_cast<std::ostream&(*)(std::ostream&, const SpatialInertia<T>&)>(
-        &operator<< )
-))
+// clang-format off
+DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
+    (static_cast<std::ostream& (*)(std::ostream&, const SpatialInertia<T>&)>(
+        &operator<< )  // clang-format would remove space lint requires
+));
+// clang-format on
 
 }  // namespace multibody
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::multibody::SpatialInertia)
+    class drake::multibody::SpatialInertia);

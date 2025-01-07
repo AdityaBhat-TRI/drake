@@ -38,11 +38,21 @@ const int kSize = 3;
 template <typename T>
 class TestSystemBase : public System<T> {
  public:
-  TestSystemBase() : System<T>(SystemScalarConverter{}) {}
+  // @param num_numeric_param_groups
+  //    The number of parameter groups to be allocated. Each group has one
+  //    numeric value.
+  // @param num_continuous_states
+  //    The size of q. If overriding AllocateTimeDerivatives(), this value
+  //    should match the number of derivatives returned by that function.
+  explicit TestSystemBase(int num_numeric_params_groups = 0,
+                          int num_continuous_states = 0)
+      : System<T>(SystemScalarConverter{}),
+        num_numeric_param_groups_(num_numeric_params_groups),
+        num_continuous_states_(num_continuous_states) {}
 
-  void SetDefaultState(const Context<T>&, State<T>*) const final {}
+  void SetDefaultParameters(const Context<T>&, Parameters<T>*) const override {}
 
-  void SetDefaultParameters(const Context<T>&, Parameters<T>*) const final {}
+  void SetDefaultState(const Context<T>&, State<T>*) const override {}
 
   void AddTriggeredWitnessFunctionToCompositeEventCollection(
       Event<T>*, CompositeEventCollection<T>*) const final {
@@ -83,6 +93,27 @@ class TestSystemBase : public System<T> {
   std::unique_ptr<ContextBase> DoAllocateContext() const final {
     auto context = std::make_unique<LeafContext<T>>();
     this->InitializeContextBase(context.get());
+
+    if (num_numeric_param_groups_ > 0) {
+      // Each parameter group has a single numeric parameter of zero.
+      std::vector<std::unique_ptr<BasicVector<T>>> numeric_params;
+      for (int g = 0; g < num_numeric_param_groups_; ++g) {
+        numeric_params.emplace_back(
+            std::make_unique<BasicVector<T>>(std::initializer_list<T>{0.0}));
+      }
+      auto parameters =
+          std::make_unique<Parameters<T>>(std::move(numeric_params));
+      parameters->set_system_id(this->get_system_id());
+      context->init_parameters(std::move(parameters));
+      DRAKE_DEMAND(context->get_parameters().num_numeric_parameter_groups() ==
+                   num_numeric_param_groups_);
+    }
+
+    // Allocate requested continuous state variables.
+    auto state = std::make_unique<ContinuousState<T>>(
+        std::make_unique<BasicVector<T>>(num_continuous_states_));
+    context->init_continuous_state(std::move(state));
+
     return context;
   }
 
@@ -160,6 +191,11 @@ class TestSystemBase : public System<T> {
     ADD_FAILURE() << "A test called a method that was expected to be unused.";
     return {};
   }
+
+  // The numbers of numeric parameter groups or continuous states created when
+  // allocating a context.
+  int num_numeric_param_groups_{};
+  int num_continuous_states_{};
 };
 
 // A shell System to test the default implementations.
@@ -177,8 +213,11 @@ class TestSystem : public TestSystemBase<double> {
 
   ~TestSystem() override {}
 
-  using System::AddConstraint;  // allow access to protected method.
+  // Allow access to protected methods.
+  using System::AddConstraint;
   using System::DeclareInputPort;
+  using SystemBase::AddDiscreteStateGroup;
+  using SystemBase::IsObviouslyNotInputDependent;
 
   const InputPort<double>& AddAbstractInputPort() {
     return this->DeclareInputPort(kUseDefaultName, kAbstractValued, 0);
@@ -570,6 +609,15 @@ TEST_F(SystemTest, PortSelectionTest) {
             &system_.get_output_port(0));
 }
 
+TEST_F(SystemTest, GetPortTwoArgs) {
+  system_.DeclareInputPort("input", kVectorValued, 1);
+  system_.AddAbstractOutputPort();
+
+  // Sanity check that the second argument to port getters doesn't hurt.
+  EXPECT_NO_THROW(system_.get_input_port(0, /* warn_deprecated = */ false));
+  EXPECT_NO_THROW(system_.get_output_port(0, /* warn_deprecated = */ false));
+}
+
 // Tests the constraint list logic.
 TEST_F(SystemTest, SystemConstraintTest) {
   EXPECT_EQ(system_.num_constraints(), 0);
@@ -654,6 +702,45 @@ TEST_F(SystemTest, IsDifferentialEquationSystem) {
   EXPECT_TRUE(system_.IsDifferentialEquationSystem());
   system_.AddAbstractInputPort();
   EXPECT_FALSE(system_.IsDifferentialEquationSystem());
+}
+
+// System used to test some contracts about setting default values in a Context
+// (as documented on the SetDefaultInvocationContract test).
+class TestDefaultSystem final : public TestSystemBase<double> {
+ public:
+  TestDefaultSystem()
+      : TestSystemBase<double>(/* num_numeric_params_groups= */ 1,
+                               /* num_continuous_states= */ 1) {
+    this->set_name("TestDefaultSystem");
+  }
+
+  void SetDefaultParameters(const Context<double>& context,
+                            Parameters<double>* parameters) const final {
+    DRAKE_DEMAND(context.get_parameters().num_numeric_parameter_groups() == 1);
+    BasicVector<double>& param = parameters->get_mutable_numeric_parameter(0);
+    param[0] = kMagicValue;
+  }
+
+  // The state simply copies the parameter value over. If the default parameters
+  // have been evaluated *first*, then the continuous state should contain the
+  // magic number.
+  void SetDefaultState(const Context<double>& context,
+                       State<double>* state) const final {
+    const BasicVector<double>& param =
+        context.get_parameters().get_numeric_parameter(0);
+    state->get_mutable_continuous_state().get_mutable_vector()[0] = param[0];
+  }
+
+  constexpr static double kMagicValue = 17.5;
+};
+
+// Confirms the documented contract that the default parameters always get set
+// before default state.
+GTEST_TEST(SystemDefaultTest, SetDefaultInvocationContract) {
+  TestDefaultSystem system;
+  auto context = system.CreateDefaultContext();
+  EXPECT_EQ(context->get_state().get_continuous_state()[0],
+            TestDefaultSystem::kMagicValue);
 }
 
 template <typename T>
@@ -963,9 +1050,12 @@ TEST_F(SystemIOTest, FixFromTypeDependentAbstractInput) {
 // LeafSystem.
 class ComputationTestSystem final : public TestSystemBase<double> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ComputationTestSystem)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ComputationTestSystem);
 
-  ComputationTestSystem() {
+  // Requesting three continuous states to match AllocateTimeDerivatives().
+  ComputationTestSystem()
+      : TestSystemBase<double>(/* num_numeric_params_groups= */ 0,
+                               /* num_continuous_states= */ 3) {
     DeclareInputPort("u0", kVectorValued, 1);
   }
 
@@ -1009,7 +1099,6 @@ class ComputationTestSystem final : public TestSystemBase<double> {
   // Derivatives can depend on time. Here x = (-1, -2, -3) * t.
   void DoCalcTimeDerivatives(const Context<double>& context,
                              ContinuousState<double>* derivatives) const final {
-    unused(context);
     EXPECT_EQ(derivatives->size(), 3);
     const double t = context.get_time();
     (*derivatives)[0] = -1 * t;
@@ -1151,6 +1240,58 @@ TEST_F(ComputationTest, Eval) {
   test_sys_.EvalTimeDerivatives(*context_);
   EXPECT_NE(entry.get_cache_entry_value(*context_).serial_number(),
             serial_number);
+}
+
+TEST_F(SystemTest, TicketInterrogation) {
+  system_.AddAbstractInputPort();
+  system_.AddDiscreteStateGroup(DiscreteStateIndex{0});
+  const std::vector<std::pair<DependencyTicket, bool /* expected */>> cases{{
+      // These are NOT input-dependent.
+      {system_.nothing_ticket(), true},
+      {system_.time_ticket(), true},
+      {system_.accuracy_ticket(), true},
+      {system_.q_ticket(), true},
+      {system_.v_ticket(), true},
+      {system_.z_ticket(), true},
+      {system_.xc_ticket(), true},
+      {system_.discrete_state_ticket(DiscreteStateIndex{0}), true},
+      {system_.xd_ticket(), true},
+      {system_.xa_ticket(), true},
+      {system_.all_state_ticket(), true},
+      {system_.pn_ticket(), true},
+      {system_.pa_ticket(), true},
+      {system_.all_parameters_ticket(), true},
+      {system_.all_sources_except_input_ports_ticket(), true},
+      // These ARE input-dependent.
+      {system_.input_port_ticket(InputPortIndex{0}), false},
+      {system_.all_input_ports_ticket(), false},
+      {system_.all_sources_ticket(), false},
+      // There are four more kinds of tickets that we don't bother to test here:
+      //
+      // - Parameters never depend on input, but IsObviouslyNotInputDependent
+      //   chooses not to scan for them, so there is no value in adding test
+      //   coverage here.
+      //
+      // - Output ports might depend on input; IsObviouslyNotInputDependent
+      //   can't trivially discover the answer, so doesn't check for them,
+      //   so there is no value in adding test coverage here.
+      //
+      // - Well-known cache entries (e.g., xcdot, xd_unique_periodic_update,
+      //   etc.) are ignored by IsObviouslyNotInputDependent, so there is no
+      //   value in adding test coverage here.
+      //
+      // - Tickets for modeling mechanical systems (configuration, kinematics,
+      //   pe, ke, pc, pnc, etc.) might or might not depend on input, but
+      //   IsObviouslyNotInputDependent doesn't bother to try to reason it out,
+      //   so there is no value in adding test coverage here. Formally, some of
+      //   these really shouldn't depend on input, but the code is confusing
+      //   enough that we've decdied not to risk it.
+  }};
+
+  for (const auto& [ticket, expected] : cases) {
+    SCOPED_TRACE(fmt::format("ticket = {}", ticket));
+    EXPECT_EQ(system_.IsObviouslyNotInputDependent(ticket), expected);
+  }
 }
 
 }  // namespace

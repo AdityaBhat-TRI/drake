@@ -11,7 +11,6 @@
 #include "drake/geometry/meshcat_visualizer_params.h"
 #include "drake/geometry/rgba.h"
 #include "drake/geometry/scene_graph.h"
-#include "drake/systems/analysis/instantaneous_realtime_rate_calculator.h"
 #include "drake/systems/framework/diagram_builder.h"
 #include "drake/systems/framework/leaf_system.h"
 
@@ -51,7 +50,7 @@ same Meshcat instance.
 template <typename T>
 class MeshcatVisualizer final : public systems::LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MeshcatVisualizer)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MeshcatVisualizer);
 
   /** Creates an instance of %MeshcatVisualizer.
 
@@ -69,12 +68,7 @@ class MeshcatVisualizer final : public systems::LeafSystem<T> {
   template <typename U>
   explicit MeshcatVisualizer(const MeshcatVisualizer<U>& other);
 
-  /** Resets the realtime rate calculator. Calculation will resume on the next
-   periodic publish event. This is useful for correcting the realtime rate after
-   simulation is resumed from a paused state, etc. */
-  void ResetRealtimeRateCalculator() const {
-    realtime_rate_calculator_.Reset();
-  }
+  ~MeshcatVisualizer() final;
 
   /** Calls Meshcat::Delete(std::string path), with the path set to
    MeshcatVisualizerParams::prefix.  Since this visualizer will only ever add
@@ -202,11 +196,6 @@ class MeshcatVisualizer final : public systems::LeafSystem<T> {
   /* The parameters for the visualizer.  */
   MeshcatVisualizerParams params_;
 
-  /* TODO(#16486): ideally this mutable state will go away once it is safe to
-  run Meshcat multithreaded */
-  mutable systems::internal::InstantaneousRealtimeRateCalculator
-      realtime_rate_calculator_{};
-
   /* The name of the alpha slider, if any. */
   std::string alpha_slider_name_;
 };
@@ -229,4 +218,4 @@ struct Traits<geometry::MeshcatVisualizer> : public NonSymbolicTraits {};
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::geometry::MeshcatVisualizer)
+    class ::drake::geometry::MeshcatVisualizer);

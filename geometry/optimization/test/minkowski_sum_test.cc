@@ -7,6 +7,7 @@
 #include "drake/common/copyable_unique_ptr.h"
 #include "drake/common/eigen_types.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
+#include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/geometry/geometry_frame.h"
 #include "drake/geometry/optimization/hpolyhedron.h"
 #include "drake/geometry/optimization/point.h"
@@ -23,6 +24,7 @@ namespace optimization {
 using Eigen::Matrix;
 using Eigen::Vector2d;
 using Eigen::Vector3d;
+using internal::MakeSceneGraphWithShape;
 using math::RigidTransformd;
 
 GTEST_TEST(MinkowskiSumTest, BasicTest) {
@@ -118,11 +120,8 @@ GTEST_TEST(MinkowskiSumTest, FromSceneGraph) {
   // Test SceneGraph constructor.
   const double kRadius = 0.2;
   const double kLength = 0.5;
-  auto [scene_graph, geom_id] =
-      internal::MakeSceneGraphWithShape(Capsule(kRadius, kLength), X_WG);
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
+  auto [scene_graph, geom_id, context, query] =
+      MakeSceneGraphWithShape(Capsule(kRadius, kLength), X_WG);
 
   MinkowskiSum S(query, geom_id, std::nullopt);
   Matrix<double, 3, 4> in_G, out_G;
@@ -181,6 +180,13 @@ GTEST_TEST(MinkowskiSumTest, TwoBoxes) {
   EXPECT_FALSE(S.MaybeGetPoint().has_value());
   ASSERT_TRUE(S.MaybeGetFeasiblePoint().has_value());
   EXPECT_TRUE(S.PointInSet(S.MaybeGetFeasiblePoint().value()));
+}
+
+GTEST_TEST(MinkowskiSumTest, FromSceneGraphBad) {
+  auto [scene_graph, geom_id, context, query] =
+      MakeSceneGraphWithShape(HalfSpace(), RigidTransformd());
+  DRAKE_EXPECT_THROWS_MESSAGE(MinkowskiSum(query, geom_id),
+                              ".*MinkowskiSum.*cannot.*HalfSpace.*");
 }
 
 GTEST_TEST(MinkowskiSumTest, CloneTest) {
@@ -293,6 +299,26 @@ GTEST_TEST(MinkowskiSumTest, EmptyInput) {
   MinkowskiSum S(P, V);
   EXPECT_TRUE(S.IsEmpty());
   EXPECT_FALSE(S.MaybeGetFeasiblePoint().has_value());
+}
+
+GTEST_TEST(MinkowskiSumTest, EmptyAndUnboundedSets) {
+  // If a MinkowskiSum has a constituent set which is empty and another which is
+  // unbounded, the whole set is empty.
+
+  // Create a HPolyhedron in ℝ^1 with no inequalities (so it's unbounded).
+  Eigen::Matrix<double, 0, 1> A1;
+  Eigen::Vector<double, 0> b1;
+  HPolyhedron h1(A1, b1);
+
+  // Create an HPolyhedron in ℝ^1 with x1 <= -1 and -x1 <= 0 (so it's empty).
+  Eigen::Matrix<double, 2, 1> A2;
+  A2 << 1, -1;
+  Eigen::Vector2d b2(-1, 0);
+  HPolyhedron h2(A2, b2);
+
+  MinkowskiSum m(h1, h2);
+  EXPECT_TRUE(m.IsEmpty());
+  EXPECT_TRUE(m.IsBounded());
 }
 
 }  // namespace optimization

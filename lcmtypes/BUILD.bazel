@@ -1,6 +1,5 @@
-package(default_visibility = ["//visibility:public"])
-
 load("//tools/install:install.bzl", "install")
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
@@ -12,19 +11,20 @@ load(
     "drake_java_binary",
 )
 load(
-    "//tools/skylark:drake_py.bzl",
-    "drake_py_library",
-    "drake_py_test",
-)
-load(
     "//tools/skylark:drake_lcm.bzl",
     "drake_lcm_cc_library",
     "drake_lcm_java_library",
     "drake_lcm_py_library",
 )
+load(
+    "//tools/skylark:drake_py.bzl",
+    "drake_py_library",
+    "drake_py_test",
+)
 load("//tools/workspace:generate_file.bzl", "generate_file")
 load(":defs.bzl", "ALL_LCM_SRCS")
-load("//tools/lint:lint.bzl", "add_lint_tests")
+
+package(default_visibility = ["//visibility:public"])
 
 # Search for all *.lcm files.
 _GLOB_ALL_LCM_SRCS = sorted(glob(["*.lcm"]))
@@ -85,18 +85,6 @@ drake_lcm_cc_library(
     deps = [
         ":hydroelastic_contact_surface_for_viz",
         ":point_pair_contact_info_for_viz",
-    ],
-)
-
-drake_lcm_cc_library(
-    name = "experimental_deformable_mesh",
-    lcm_package = "drake",
-    lcm_srcs = [
-        "experimental_lcmt_deformable_tri.lcm",
-        "experimental_lcmt_deformable_tri_mesh_init.lcm",
-        "experimental_lcmt_deformable_tri_meshes_init.lcm",
-        "experimental_lcmt_deformable_tri_mesh_update.lcm",
-        "experimental_lcmt_deformable_tri_meshes_update.lcm",
     ],
 )
 
@@ -266,23 +254,12 @@ drake_lcm_cc_library(
     ],
 )
 
-# Generate the *.py sources, but keep __init__.py separate, so that it doesn't
-# get installed.  The install will use this (private) library.  Users should
-# depend on ":lcmtypes_drake_py", immediately below.
 drake_lcm_py_library(
-    name = "_generated_lcmtypes_drake_py",
-    # We'll rely on the //:module_py path munging instead.
-    add_current_package_to_imports = False,
+    name = "lcmtypes_drake_py",
     lcm_package = "drake",
     lcm_srcs = ALL_LCM_SRCS,
-    visibility = ["//visibility:private"],
-)
-
-drake_py_library(
-    name = "lcmtypes_drake_py",
-    srcs = ["__init__.py"],
     deps = [
-        ":_generated_lcmtypes_drake_py",
+        "//:module_py",
     ],
 )
 
@@ -297,7 +274,6 @@ LCMTYPES_CC = [
     ":acrobot",
     ":allegro",
     ":call_python",
-    ":experimental_deformable_mesh",
     ":point",
     ":point_cloud",
     ":header",
@@ -364,7 +340,7 @@ install(
         ],
     }),
     targets = [
-        ":_generated_lcmtypes_drake_py",
+        ":lcmtypes_drake_py",
     ] + select({
         "@lcm//:lcm_install_java_is_off": [],
         "//conditions:default": [

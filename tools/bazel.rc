@@ -1,5 +1,9 @@
-# Don't use bzlmod yet.
-common --enable_bzlmod=false
+# TODO(#20731) Stop using WORKSPACE (and WORKSPACE.bzlmod).
+common --enable_workspace=true
+
+# Require all rules to be loaded in MODULE.bazel -- don't allow any legacy
+# implicit loads built-in to Bazel itself to take effect.
+common --incompatible_autoload_externally=
 
 # Default to an optimized build.
 build -c opt
@@ -8,9 +12,17 @@ build -c opt
 build --strip=never
 build --strict_system_includes
 
+# Use the host Python interpreter by default.
+build --extra_toolchains=@python//:all
+
 # Use C++20 by default.
 build --cxxopt=-std=c++20
 build --host_cxxopt=-std=c++20
+
+# The legacy __init__.py causes runfiles test flakes with Bazel >= 7, and
+# in any case we don't want this feature in the first place. We should
+# create all __init__.py files ourselves by hand anywhere we need them.
+build --incompatible_default_to_explicit_init_py
 
 # Default test options.
 build --test_output=errors
@@ -21,9 +33,6 @@ build --test_summary=terse
 # they can also build without it, typically by using a select statement.
 # config_setting rules for proprietary software are provided in //tools.
 build --test_tag_filters=-gurobi,-mosek,-snopt
-
-# Inject DISPLAY into test runner environment for tests that use X.
-build --test_env=DISPLAY
 
 # Location of the Gurobi license key file, typically named "gurobi.lic".
 # Setting this --test_env for all configurations is deliberate to improve
@@ -58,8 +67,8 @@ build:everything --test_tag_filters=-no_everything
 # -- To run tests where Gurobi is used, ensure that you include
 # -- "gurobi_test_tags()" from //tools/skylark:test_tags.bzl.
 # -- If Gurobi is optional, set gurobi_required=False.
-build:gurobi --define=WITH_GUROBI=ON
-build:everything --define=WITH_GUROBI=ON
+build:gurobi --@drake//tools/flags:with_gurobi=True
+build:everything --@drake//tools/flags:with_gurobi=True
 # N.B. The build:packaging configuration does NOT use Gurobi (yet).
 # See https://github.com/RobotLocomotion/drake/issues/10804.
 build:packaging --test_tag_filters=-gurobi
@@ -71,9 +80,9 @@ build:packaging --test_tag_filters=-gurobi
 # -- To run tests where MOSEK™ is used, ensure that you include
 # -- "mosek_test_tags()" from //tools/skylark:test_tags.bzl.
 # -- If MOSEK™ is optional, set mosek_required=False.
-build:mosek --define=WITH_MOSEK=ON
-build:packaging --define=WITH_MOSEK=ON
-build:everything --define=WITH_MOSEK=ON
+build:mosek --@drake//tools/flags:with_mosek=True
+build:packaging --@drake//tools/flags:with_mosek=True
+build:everything --@drake//tools/flags:with_mosek=True
 
 ### A configuration that enables SNOPT. ###
 # -- To use this config, you must have access to the private repository
@@ -82,6 +91,6 @@ build:everything --define=WITH_MOSEK=ON
 #
 # -- To run tests that require SNOPT, also specify a set of test_tag_filters
 # -- that does not exclude the "snopt" tag.
-build:snopt --define=WITH_SNOPT=ON
-build:packaging --define=WITH_SNOPT=ON
-build:everything --define=WITH_SNOPT=ON
+build:snopt --@drake//tools/flags:with_snopt=True
+build:packaging --@drake//tools/flags:with_snopt=True
+build:everything --@drake//tools/flags:with_snopt=True

@@ -8,6 +8,7 @@ import scipy.sparse
 from pydrake.common import ToleranceType
 from pydrake.common.eigen_geometry import AngleAxis_, Quaternion_
 from pydrake.common.test_utilities import numpy_compare
+from pydrake.common.test_utilities.deprecation import catch_drake_warnings
 from pydrake.common.test_utilities.pickle_compare import assert_pickle
 from pydrake.common.value import AbstractValue
 from pydrake.common.yaml import yaml_load_typed
@@ -18,6 +19,8 @@ from pydrake.trajectories import (
     BsplineTrajectory_,
     CompositeTrajectory_,
     DerivativeTrajectory_,
+    ExponentialPlusPiecewisePolynomial,
+    FunctionHandleTrajectory_,
     PathParameterizedTrajectory_,
     PiecewisePolynomial_,
     PiecewisePose_,
@@ -29,26 +32,71 @@ from pydrake.trajectories import (
 from pydrake.symbolic import Variable, Expression
 
 
-# Custom trajectory class used to test Trajectory subclassing in python.
+# Custom trajectory class used to test Trajectory subclassing in Python.
 class CustomTrajectory(Trajectory):
     def __init__(self):
         Trajectory.__init__(self)
 
+    # TODO(jwnimmer-tri) Should be __deepcopy__ not Clone.
     def Clone(self):
         return CustomTrajectory()
 
+    def do_value(self, t):
+        return np.array([[t + 1.0, t + 2.0]])
+
+    def do_has_derivative(self):
+        return True
+
+    def DoEvalDerivative(self, t, derivative_order):
+        if derivative_order >= 2:
+            return np.zeros((1, 2))
+        elif derivative_order == 1:
+            return np.ones((1, 2))
+        elif derivative_order == 0:
+            return self.value(t)
+
+    def DoMakeDerivative(self, derivative_order):
+        return DerivativeTrajectory_[float](self, derivative_order)
+
+    def do_rows(self):
+        return 1
+
+    def do_cols(self):
+        return 2
+
+    def do_start_time(self):
+        return 3.0
+
+    def do_end_time(self):
+        return 4.0
+
+
+# Legacy custom trajectory class used to test Trajectory subclassing in Python.
+# This uses the old spellings for how to override the NVI functions.
+class LegacyCustomTrajectory(Trajectory):
+    def __init__(self):
+        Trajectory.__init__(self)
+
+    def Clone(self):
+        return LegacyCustomTrajectory()
+
+    # This spelling of the virtual override is deprecated.
     def rows(self):
         return 1
 
+    # This spelling of the virtual override is deprecated.
     def cols(self):
         return 2
 
+    # This spelling of the virtual override is deprecated.
     def start_time(self):
         return 3.0
 
+    # This spelling of the virtual override is deprecated.
     def end_time(self):
         return 4.0
 
+    # This spelling of the virtual override is deprecated.
     def value(self, t):
         return np.array([[t + 1.0, t + 2.0]])
 
@@ -96,13 +144,45 @@ class TestTrajectories(unittest.TestCase):
         numpy_compare.assert_float_equal(
             deriv.value(t=2.3), np.ones((1, 2)))
 
+    def test_legacy_custom_trajectory(self):
+        trajectory = LegacyCustomTrajectory()
+        self.assertEqual(trajectory.rows(), 1)
+        self.assertEqual(trajectory.cols(), 2)
+        self.assertEqual(trajectory.start_time(), 3.0)
+        self.assertEqual(trajectory.end_time(), 4.0)
+        self.assertTrue(trajectory.has_derivative())
+        numpy_compare.assert_float_equal(trajectory.value(t=1.5),
+                                         np.array([[2.5, 3.5]]))
+        numpy_compare.assert_float_equal(
+            trajectory.EvalDerivative(t=2.3, derivative_order=1),
+            np.ones((1, 2)))
+        numpy_compare.assert_float_equal(
+            trajectory.EvalDerivative(t=2.3, derivative_order=2),
+            np.zeros((1, 2)))
+
+        # Use StackedTrajectory to call the deprecated overrides from C++ so
+        # that we trigger the deprecation warnings.
+        stacked = StackedTrajectory_[float]()
+        with catch_drake_warnings():
+            # The C++ code calls rows() and cols() -- both of which cause
+            # deprecation warnings with the legacy overrides -- but the total
+            # number of calls varies between Debug and Release, so we don't
+            # check the exact tally here.
+            stacked.Append(trajectory)
+        with catch_drake_warnings(expected_count=1):
+            stacked.value(t=1.5)
+        with catch_drake_warnings(expected_count=1):
+            self.assertEqual(stacked.start_time(), 3.0)
+        with catch_drake_warnings(expected_count=1):
+            self.assertEqual(stacked.end_time(), 4.0)
+
     @numpy_compare.check_all_types
     def test_bezier_curve(self, T):
         curve = BezierCurve_[T]()
         self.assertEqual(curve.rows(), 0)
         self.assertEqual(curve.cols(), 1)
 
-        points = np.mat("4.0, 5.0; 6.0, 7.0")
+        points = np.array([[4.0, 5.0], [6.0, 7.0]])
         curve = BezierCurve_[T](start_time=1,
                                 end_time=2,
                                 control_points=points)
@@ -187,6 +267,58 @@ class TestTrajectories(unittest.TestCase):
         dut.Clone()
         copy.copy(dut)
         copy.deepcopy(dut)
+
+    def test_exponential_plus_piecewise_polynomial(self):
+        K = np.array([1.23])
+        A = np.array([3.45])
+        alpha = np.array([6.78])
+        breaks = np.array([0.0, 0.5])
+        samples = np.array([[1.0, 2.0]])
+        polynomial_part = PiecewisePolynomial_[float].FirstOrderHold(
+            breaks, samples)
+        dut = ExponentialPlusPiecewisePolynomial(
+            K=K, A=A, alpha=alpha, piecewise_polynomial_part=polynomial_part)
+        self.assertEqual(dut.rows(), 1)
+        self.assertEqual(dut.cols(), 1)
+        self.assertEqual(dut.value(0.25).shape, (1, 1))
+        self.assertEqual(dut.start_time(), 0.0)
+        self.assertEqual(dut.end_time(), 0.5)
+        dut.shiftRight(1.0)
+        self.assertEqual(dut.start_time(), 1.0)
+        self.assertEqual(dut.end_time(), 1.5)
+        dut.Clone()
+        copy.copy(dut)
+        copy.deepcopy(dut)
+
+    @numpy_compare.check_all_types
+    def test_function_handle_trajectory(self, T):
+        def f(t):
+            return np.array([[t, t**2]])
+        dut = FunctionHandleTrajectory_[T](
+            func=f, rows=1, cols=2, start_time=0, end_time=1)
+        self.assertEqual(dut.rows(), 1)
+        self.assertEqual(dut.cols(), 2)
+        self.assertFalse(dut.has_derivative())
+        numpy_compare.assert_float_equal(dut.start_time(), 0.0)
+        numpy_compare.assert_float_equal(dut.end_time(), 1.0)
+        for t in [0.0, 0.5, 1.0]:
+            numpy_compare.assert_float_equal(dut.value(t), f(t))
+        self.assertIsInstance(dut.Clone(), FunctionHandleTrajectory_[T])
+        copy.copy(dut)
+        copy.deepcopy(dut)
+
+        def df(t, order):
+            if order == 1:
+                return np.array([[1, 2*t]])
+            else:
+                raise RuntimeError("Unsupported order")
+
+        dut.set_derivative(func=df)
+        self.assertTrue(dut.has_derivative())
+        for t in [0.0, 0.5, 1.0]:
+            numpy_compare.assert_float_equal(
+                dut.EvalDerivative(t, 1), df(t, 1))
+        self.assertIsInstance(dut.MakeDerivative(1), DerivativeTrajectory_[T])
 
     def test_legacy_unpickle(self):
         """Checks that data pickled as BsplineTrajectory_[float] in Drake
@@ -515,6 +647,9 @@ class TestTrajectories(unittest.TestCase):
                               PiecewisePolynomial)
         self.assertIsInstance(traj.segment(segment_index=1),
                               PiecewisePolynomial)
+
+        traj = CompositeTrajectory.AlignAndConcatenate(segments=[pp1, pp2])
+        self.assertIsInstance(traj, CompositeTrajectory)
 
     @numpy_compare.check_all_types
     def test_quaternion_slerp(self, T):

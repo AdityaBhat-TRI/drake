@@ -5,7 +5,13 @@ Generates the serialize.h header file, containing Clarabel's settings names.
 import argparse
 from pathlib import Path
 
-from bazel_tools.tools.python.runfiles import runfiles
+from python import runfiles
+
+_FIELDS_TO_SKIP = {
+    # These are enums, which we don't support yet.
+    "chordal_decomposition_merge_method",
+    "direct_solve_method",
+}
 
 _PROLOGUE = """\
 #pragma once
@@ -61,7 +67,11 @@ def _settings_names():
             continue
         if line.startswith("static"):
             continue
-        assert line.endswith(";")
+        if line.startswith("#ifdef"):
+            continue
+        if line.startswith("#endif"):
+            continue
+        assert line.endswith(";"), line
         line = line[:-1]
         assert line.count(" ") == 1
         _, name = line.split()
@@ -71,7 +81,10 @@ def _settings_names():
 def _create_header_text():
     result = _PROLOGUE
     for name in _settings_names():
-        result += f"  DRAKE_VISIT({name});\n"
+        if name in _FIELDS_TO_SKIP:
+            result += f"  // skipped: {name}\n"
+        else:
+            result += f"  DRAKE_VISIT({name});\n"
     result += _EPILOGUE
     return result
 

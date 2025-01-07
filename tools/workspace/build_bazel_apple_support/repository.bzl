@@ -10,7 +10,14 @@ def build_bazel_apple_support_repository(
     github_archive(
         name = name,
         repository = "bazelbuild/apple_support",  # License: Apache-2.0
-        commit = "1.14.0",
-        sha256 = "c62323d024eb512060714963051bbbfce007e652bc76fd68183504dd1585c119",  # noqa
+        upgrade_advice = """
+        When updating, you must also manually propagate to the new version
+        number into the MODULE.bazel file (at the top level of Drake).
+        """,
+        commit = "1.17.1",
+        sha256 = "cfc295c5acb751fc3299425a1852e421ec0a560cdd97b6a7426d35a1271c2df5",  # noqa
+        patches = [
+            ":patches/no_bazel_features.patch",
+        ],
         mirrors = mirrors,
     )

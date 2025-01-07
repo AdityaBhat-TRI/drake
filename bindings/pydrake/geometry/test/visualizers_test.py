@@ -1,8 +1,11 @@
 import pydrake.geometry as mut
 
 import copy
+import gc
+import itertools
 import unittest
 import urllib.request
+import weakref
 
 import numpy as np
 import umsgpack
@@ -15,6 +18,13 @@ from pydrake.math import RigidTransform
 from pydrake.perception import PointCloud
 from pydrake.systems.analysis import Simulator_
 from pydrake.systems.framework import DiagramBuilder_, InputPort_
+from pydrake.systems.test.test_util import call_build_from_cpp
+
+# TODO(mwoehlke-kitware): Remove this when Jammy's python3-u-msgpack has been
+# updated to 2.5.2 or later.
+if not hasattr(umsgpack, 'Hashable'):
+    import collections
+    setattr(umsgpack.collections, 'Hashable', collections.abc.Hashable)
 
 
 class TestGeometryVisualizers(unittest.TestCase):
@@ -24,7 +34,6 @@ class TestGeometryVisualizers(unittest.TestCase):
         SceneGraph = mut.SceneGraph_[T]
         DiagramBuilder = DiagramBuilder_[T]
         Simulator = Simulator_[T]
-        lcm = DrakeLcm()
         role = mut.Role.kIllustration
         params = mut.DrakeVisualizerParams(
             publish_period=0.1, role=mut.Role.kIllustration,
@@ -35,39 +44,77 @@ class TestGeometryVisualizers(unittest.TestCase):
         copy.copy(params)
 
         # Add some subscribers to detect message broadcast.
-        load_channel = "DRAKE_VIEWER_LOAD_ROBOT"
-        draw_channel = "DRAKE_VIEWER_DRAW"
-        load_subscriber = Subscriber(
-            lcm, load_channel, lcmt_viewer_load_robot)
-        draw_subscriber = Subscriber(
-            lcm, draw_channel, lcmt_viewer_draw)
+        def add_subscribers(lcm):
+            load_channel = "DRAKE_VIEWER_LOAD_ROBOT"
+            draw_channel = "DRAKE_VIEWER_DRAW"
+            load_subscriber = Subscriber(
+                lcm, load_channel, lcmt_viewer_load_robot)
+            draw_subscriber = Subscriber(
+                lcm, draw_channel, lcmt_viewer_draw)
+            return load_subscriber, draw_subscriber
 
-        # There are three ways to configure DrakeVisualizer.
+        # There are three ways to place DrakeVisualizer into a Diagram. We'll
+        # declare a helper functions for each of the ways. All of the helpers
+        # return a weak reference to the DrakeLcm object that they create, so
+        # that the test logic can verify correct object lifetimes.
         def by_hand(builder, scene_graph, params):
+            lcm = DrakeLcm()
             visualizer = builder.AddSystem(
                 mut.DrakeVisualizer_[T](lcm=lcm, params=params))
             builder.Connect(scene_graph.get_query_output_port(),
                             visualizer.query_object_input_port())
+            return weakref.finalize(lcm, lambda: None)
 
         def auto_connect_to_system(builder, scene_graph, params):
+            lcm = DrakeLcm()
             mut.DrakeVisualizer_[T].AddToBuilder(builder=builder,
                                                  scene_graph=scene_graph,
                                                  lcm=lcm, params=params)
+            return weakref.finalize(lcm, lambda: None)
 
         def auto_connect_to_port(builder, scene_graph, params):
+            lcm = DrakeLcm()
             mut.DrakeVisualizer_[T].AddToBuilder(
                 builder=builder,
                 query_object_port=scene_graph.get_query_output_port(),
                 lcm=lcm, params=params)
+            return weakref.finalize(lcm, lambda: None)
 
-        for func in [by_hand, auto_connect_to_system, auto_connect_to_port]:
+        # After adding the visualizer, there are two ways to build the
+        # diagram.
+
+        def python_builder_build(builder):
+            # The pydrake binding ensures object lifetimes properly.
+            return builder.Build()
+
+        def cxx_builder_build(builder):
+            # Calling build on a python-populated diagram builder from c++ is
+            # dodgy at best, but don't worry -- all will be well if something
+            # retains ownership of the diagram.
+            return call_build_from_cpp(builder)
+
+        for add_function, build_function in itertools.product(
+                    [by_hand, auto_connect_to_system, auto_connect_to_port],
+                    [python_builder_build, cxx_builder_build]):
             # Build the diagram.
             builder = DiagramBuilder()
             scene_graph = builder.AddSystem(SceneGraph())
-            func(builder, scene_graph, params)
+            lcm_spy = add_function(builder, scene_graph, params)
+            diagram = build_function(builder)
+
+            # Remove extraneous references, and collect garbage for good
+            # measure.
+            del builder
+            del scene_graph
+            gc.collect()
+
+            # Check the lcm object is still alive, recover a reference, and set
+            # receivers.
+            assert lcm_spy.alive
+            lcm = lcm_spy.peek()[0]
+            load_subscriber, draw_subscriber = add_subscribers(lcm)
 
             # Simulate to t = 0 to send initial load and draw messages.
-            diagram = builder.Build()
             Simulator(diagram).AdvanceTo(0)
             lcm.HandleSubscriptions(0)
             self.assertEqual(load_subscriber.count, 1)
@@ -75,7 +122,18 @@ class TestGeometryVisualizers(unittest.TestCase):
             load_subscriber.clear()
             draw_subscriber.clear()
 
+            # The diagram is mortal.
+            diagram_spy = weakref.finalize(diagram, lambda: None)
+            del diagram
+            del lcm
+            gc.collect()
+            self.assertFalse(diagram_spy.alive)
+            self.assertFalse(lcm_spy.alive)
+
         # Ad hoc broadcasting.
+        # Recreate some items deleted above.
+        lcm = DrakeLcm()
+        load_subscriber, draw_subscriber = add_subscribers(lcm)
         scene_graph = SceneGraph()
 
         mut.DrakeVisualizer_[T].DispatchLoadMessage(
@@ -210,7 +268,8 @@ class TestGeometryVisualizers(unittest.TestCase):
             "name": "alice",
         }))
         self.assertEqual(meshcat.GetButtonClicks(name="alice"), 1)
-        meshcat.DeleteButton(name="alice")
+        self.assertTrue(meshcat.DeleteButton(name="alice"))
+        self.assertFalse(meshcat.DeleteButton(name="alice", strict=False))
         meshcat.AddSlider(name="slider",
                           min=0,
                           max=1,
@@ -223,6 +282,7 @@ class TestGeometryVisualizers(unittest.TestCase):
         self.assertAlmostEqual(meshcat.GetSliderValue(
             name="slider"), 0.7, delta=1e-14)
         meshcat.DeleteSlider(name="slider")
+        meshcat.DeleteSlider(name="slider", strict=False)
         meshcat.DeleteAddedControls()
         self.assertIn("data:application/octet-binary;base64",
                       meshcat.StaticHtml())
@@ -231,8 +291,9 @@ class TestGeometryVisualizers(unittest.TestCase):
         self.assertIsNone(gamepad.index)
         self.assertEqual(len(gamepad.button_values), 0)
         self.assertEqual(len(gamepad.axes), 0)
-        meshcat.SetRealtimeRate(1.0)
+        meshcat.SetRealtimeRate(rate=1.0)
         meshcat.GetRealtimeRate()
+        meshcat.SetSimulationTime(sim_time=1.0)
         meshcat.Flush()
 
         meshcat.StartRecording(frames_per_second=64.0,
@@ -289,6 +350,14 @@ class TestGeometryVisualizers(unittest.TestCase):
         # The pose is None because no meshcat session has broadcast its pose.
         self.assertIsNone(meshcat.GetTrackedCameraPose())
 
+        # Test updating lights (and make sure types are cast correctly)
+        path = "/Lights/AmbientLight/<object>"
+        attribute = "intensity"
+        meshcat.SetProperty(path, attribute, 2)
+        message = meshcat._GetPackedProperty(path, attribute)
+        parsed = umsgpack.unpackb(message)
+        self.assertEqual(parsed['value'], 2.0)
+
     def test_meshcat_404(self):
         meshcat = mut.Meshcat()
 
@@ -341,7 +410,6 @@ class TestGeometryVisualizers(unittest.TestCase):
         self.assertIn("publish_period", repr(params))
         copy.copy(params)
         vis = mut.MeshcatVisualizer_[T](meshcat=meshcat, params=params)
-        vis.ResetRealtimeRateCalculator()
         vis.Delete()
         self.assertIsInstance(vis.query_object_input_port(), InputPort_[T])
         animation = vis.StartRecording(set_transforms_while_recording=True)

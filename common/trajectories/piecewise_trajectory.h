@@ -24,19 +24,17 @@ class PiecewiseTrajectory : public Trajectory<T> {
   /// Minimum delta quantity used for comparing time.
   static constexpr double kEpsilonTime = std::numeric_limits<double>::epsilon();
 
-  ~PiecewiseTrajectory() override = default;
+  ~PiecewiseTrajectory() override;
 
   int get_number_of_segments() const;
 
   T start_time(int segment_number) const;
+  using Trajectory<T>::start_time;  // Don't shadow the base class.
 
   T end_time(int segment_number) const;
+  using Trajectory<T>::end_time;  // Don't shadow the base class.
 
   T duration(int segment_number) const;
-
-  T start_time() const override;
-
-  T end_time() const override;
 
   /**
    * Returns true iff `t >= getStartTime() && t <= getEndTime()`.
@@ -55,11 +53,15 @@ class PiecewiseTrajectory : public Trajectory<T> {
 
  protected:
   // Final subclasses are allowed to make copy/move/assign public.
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(PiecewiseTrajectory)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(PiecewiseTrajectory);
   PiecewiseTrajectory() = default;
 
   /// @p breaks increments must be greater or equal to kEpsilonTime.
   explicit PiecewiseTrajectory(const std::vector<T>& breaks);
+
+  // Trajectory overrides.
+  T do_start_time() const override;
+  T do_end_time() const override;
 
   bool SegmentTimesEqual(const PiecewiseTrajectory& b,
                          double tol = kEpsilonTime) const;
@@ -77,4 +79,4 @@ class PiecewiseTrajectory : public Trajectory<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::PiecewiseTrajectory)
+    class drake::trajectories::PiecewiseTrajectory);

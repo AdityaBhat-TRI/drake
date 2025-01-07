@@ -20,6 +20,7 @@ using Eigen::Vector3d;
 using math::RigidTransformd;
 using math::RollPitchYawd;
 using math::RotationMatrixd;
+using Quaterniond = Eigen::Quaternion<double>;
 
 constexpr double kTolerance = 10 * std::numeric_limits<double>::epsilon();
 
@@ -32,13 +33,14 @@ class RpyFloatingMobilizerTest : public MobilizerTester {
     mobilizer_ = &AddJointAndFinalize<RpyFloatingJoint, RpyFloatingMobilizer>(
         std::make_unique<RpyFloatingJoint<double>>(
             "joint0", tree().world_body().body_frame(), body_->body_frame()));
+    mutable_mobilizer_ = const_cast<RpyFloatingMobilizer<double>*>(mobilizer_);
   }
 
   // Helper to set the this fixture's context to an arbitrary non-zero state
   // comprised of arbitrary_rpy() and arbitrary_translation().
   void SetArbitraryNonZeroState() {
-    mobilizer_->set_angles(context_.get(), arbitrary_rpy().vector());
-    mobilizer_->set_translation(context_.get(), arbitrary_translation());
+    mobilizer_->SetAngles(context_.get(), arbitrary_rpy().vector());
+    mobilizer_->SetTranslation(context_.get(), arbitrary_translation());
   }
 
   RollPitchYawd arbitrary_rpy() const {
@@ -48,6 +50,7 @@ class RpyFloatingMobilizerTest : public MobilizerTester {
 
  protected:
   const RpyFloatingMobilizer<double>* mobilizer_{nullptr};
+  RpyFloatingMobilizer<double>* mutable_mobilizer_{nullptr};
 };
 
 TEST_F(RpyFloatingMobilizerTest, CanRotateOrTranslate) {
@@ -57,7 +60,7 @@ TEST_F(RpyFloatingMobilizerTest, CanRotateOrTranslate) {
 
 // Verifies methods to mutate and access the context.
 TEST_F(RpyFloatingMobilizerTest, BasicIntrospection) {
-  EXPECT_TRUE(mobilizer_->is_floating());
+  EXPECT_TRUE(mobilizer_->has_six_dofs());
   EXPECT_FALSE(mobilizer_->has_quaternion_dofs());
 }
 
@@ -98,11 +101,11 @@ TEST_F(RpyFloatingMobilizerTest, SetFromRigidTransform) {
 
 TEST_F(RpyFloatingMobilizerTest, VelocityAccessAndMutation) {
   const Vector3d w_FM(M_PI / 3, -M_PI / 3, M_PI / 5);
-  mobilizer_->set_angular_velocity(context_.get(), w_FM);
+  mobilizer_->SetAngularVelocity(context_.get(), w_FM);
   EXPECT_EQ(mobilizer_->get_angular_velocity(*context_), w_FM);
 
   const Vector3d v_FM(1.0, 2.0, 3.0);
-  mobilizer_->set_translational_velocity(context_.get(), v_FM);
+  mobilizer_->SetTranslationalVelocity(context_.get(), v_FM);
   EXPECT_EQ(mobilizer_->get_translational_velocity(*context_), v_FM);
 
   const auto v = (Vector6<double>() << w_FM, v_FM).finished();
@@ -118,21 +121,60 @@ TEST_F(RpyFloatingMobilizerTest, ZeroState) {
 
   // Set the "zero state" for this mobilizer, which does happen to be that of
   // an identity rigid transform.
-  mobilizer_->set_zero_state(*context_, &context_->get_mutable_state());
+  mobilizer_->SetZeroState(*context_, &context_->get_mutable_state());
   EXPECT_TRUE(
       mobilizer_->CalcAcrossMobilizerTransform(*context_).IsExactlyIdentity());
+}
+
+TEST_F(RpyFloatingMobilizerTest, SetGetPosePair) {
+  const Quaterniond set_quaternion(RollPitchYawd(0.1, 0.2, 0.3).ToQuaternion());
+  const Vector3d set_translation(1.0, 2.0, 3.0);
+  const RigidTransformd set_pose(set_quaternion, set_translation);
+
+  SetArbitraryNonZeroState();
+  const std::pair<Eigen::Quaternion<double>, Vector3d> before =
+      mobilizer_->GetPosePair(*context_);
+
+  EXPECT_FALSE(math::RigidTransform(before.first, before.second)
+                   .IsNearlyEqualTo(set_pose, 1e-8));
+
+  mobilizer_->SetPosePair(*context_, set_quaternion, set_translation,
+                          &context_->get_mutable_state());
+
+  const std::pair<Quaterniond, Vector3d> after =
+      mobilizer_->GetPosePair(*context_);
+
+  EXPECT_TRUE(math::RigidTransform(after.first, after.second)
+                  .IsNearlyEqualTo(set_pose, 1e-14));
+}
+
+TEST_F(RpyFloatingMobilizerTest, SetGetSpatialVelocity) {
+  const SpatialVelocity<double> set_V(Vector3d(1.0, 2.0, 3.0),
+                                      Vector3d(4.0, 5.0, 6.0));
+
+  SetArbitraryNonZeroState();
+  const SpatialVelocity<double> before =
+      mobilizer_->GetSpatialVelocity(*context_);
+
+  EXPECT_FALSE(before.IsApprox(set_V, 1e-8));
+
+  mobilizer_->SetSpatialVelocity(*context_, set_V,
+                                 &context_->get_mutable_state());
+
+  const SpatialVelocity<double> after =
+      mobilizer_->GetSpatialVelocity(*context_);
+
+  // We don't promise, but this should be a bit-identical match.
+  EXPECT_EQ(after.get_coeffs(), set_V.get_coeffs());
 }
 
 TEST_F(RpyFloatingMobilizerTest, RandomState) {
   RandomGenerator generator;
   std::uniform_real_distribution<symbolic::Expression> uniform;
 
-  RpyFloatingMobilizer<double>* mutable_mobilizer =
-      &mutable_tree().get_mutable_variant(*mobilizer_);
-
   // Default behavior is to set to zero.
-  mutable_mobilizer->set_random_state(*context_, &context_->get_mutable_state(),
-                                      &generator);
+  mutable_mobilizer_->set_random_state(
+      *context_, &context_->get_mutable_state(), &generator);
   EXPECT_TRUE(
       RigidTransformd(mobilizer_->CalcAcrossMobilizerTransform(*context_))
           .IsExactlyIdentity());
@@ -148,11 +190,11 @@ TEST_F(RpyFloatingMobilizerTest, RandomState) {
   }
 
   // Set position to be random, but not velocity (yet).
-  mutable_mobilizer->set_random_angles_distribution(angles_distribution);
-  mutable_mobilizer->set_random_translation_distribution(
+  mutable_mobilizer_->set_random_angles_distribution(angles_distribution);
+  mutable_mobilizer_->set_random_translation_distribution(
       translation_distribution);
-  mutable_mobilizer->set_random_state(*context_, &context_->get_mutable_state(),
-                                      &generator);
+  mutable_mobilizer_->set_random_state(
+      *context_, &context_->get_mutable_state(), &generator);
   EXPECT_FALSE(
       RigidTransformd(mobilizer_->CalcAcrossMobilizerTransform(*context_))
           .IsExactlyIdentity());
@@ -165,9 +207,9 @@ TEST_F(RpyFloatingMobilizerTest, RandomState) {
   for (int i = 0; i < 6; i++) {
     velocity_distribution[i] = uniform(generator) - i - 1.0;
   }
-  mutable_mobilizer->set_random_velocity_distribution(velocity_distribution);
-  mutable_mobilizer->set_random_state(*context_, &context_->get_mutable_state(),
-                                      &generator);
+  mutable_mobilizer_->set_random_velocity_distribution(velocity_distribution);
+  mutable_mobilizer_->set_random_state(
+      *context_, &context_->get_mutable_state(), &generator);
   EXPECT_FALSE(
       RigidTransformd(mobilizer_->CalcAcrossMobilizerTransform(*context_))
           .IsExactlyIdentity());
@@ -230,7 +272,7 @@ TEST_F(RpyFloatingMobilizerTest, MapVelocityToQdotAndBack) {
 // inverse of N(q).
 TEST_F(RpyFloatingMobilizerTest, KinematicMapping) {
   RollPitchYawd rpy(M_PI / 3, -M_PI / 3, M_PI / 5);
-  mobilizer_->set_angles(context_.get(), rpy.vector());
+  mobilizer_->SetAngles(context_.get(), rpy.vector());
 
   ASSERT_EQ(mobilizer_->num_positions(), 6);
   ASSERT_EQ(mobilizer_->num_velocities(), 6);
@@ -287,7 +329,7 @@ TEST_F(RpyFloatingMobilizerTest, MapUsesNplus) {
 TEST_F(RpyFloatingMobilizerTest, SingularityError) {
   // Set state in singularity
   const Vector3d rpy_value(M_PI / 3, M_PI / 2, M_PI / 5);
-  mobilizer_->set_angles(context_.get(), rpy_value);
+  mobilizer_->SetAngles(context_.get(), rpy_value);
 
   // Set arbitrary qdot and MapVelocityToQDot.
   const Vector6<double> v = (Vector6<double>() << 1, 2, 3, 4, 5, 6).finished();

@@ -27,6 +27,7 @@ using Eigen::Matrix;
 using Eigen::Vector2d;
 using Eigen::Vector3d;
 using Eigen::Vector4d;
+using internal::MakeSceneGraphWithShape;
 using math::RigidTransformd;
 
 GTEST_TEST(CartesianProductTest, BasicTest) {
@@ -83,6 +84,10 @@ GTEST_TEST(CartesianProductTest, BasicTest) {
   // Test MaybeGetFeasiblePoint.
   ASSERT_TRUE(S2.MaybeGetFeasiblePoint().has_value());
   EXPECT_TRUE(S2.PointInSet(S2.MaybeGetFeasiblePoint().value()));
+
+  // Test the A and b getters (since not specified, they should be nullopt).
+  EXPECT_EQ(S2.A(), std::nullopt);
+  EXPECT_EQ(S2.b(), std::nullopt);
 }
 
 GTEST_TEST(CartesianProductTest, DefaultCtor) {
@@ -125,11 +130,8 @@ GTEST_TEST(CartesianProductTest, FromSceneGraph) {
   // Test SceneGraph constructor.
   const double kRadius = 0.2;
   const double kLength = 0.5;
-  auto [scene_graph, geom_id] =
-      internal::MakeSceneGraphWithShape(Cylinder(kRadius, kLength), X_WG);
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
+  auto [scene_graph, geom_id, context, query] =
+      MakeSceneGraphWithShape(Cylinder(kRadius, kLength), X_WG);
 
   CartesianProduct S(query, geom_id, std::nullopt);
   Matrix<double, 3, 4> in_G, out_G;
@@ -180,6 +182,13 @@ GTEST_TEST(CartesianProductTest, FromSceneGraph) {
 
   ASSERT_TRUE(S2.MaybeGetFeasiblePoint().has_value());
   EXPECT_TRUE(S2.PointInSet(S2.MaybeGetFeasiblePoint().value(), kTol));
+}
+
+GTEST_TEST(CartesianProductTest, FromSceneGraphBad) {
+  auto [scene_graph, geom_id, context, query] =
+      MakeSceneGraphWithShape(HalfSpace(), RigidTransformd());
+  DRAKE_EXPECT_THROWS_MESSAGE(CartesianProduct(query, geom_id),
+                              ".*CartesianProduct.*cannot.*HalfSpace.*");
 }
 
 GTEST_TEST(CartesianProductTest, TwoBoxes) {
@@ -234,6 +243,12 @@ GTEST_TEST(CartesianProductTest, ScaledPoints) {
   const CartesianProduct S(MakeConvexSets(P1, P2), A, b);
 
   const double kTol = 1e-15;
+
+  ASSERT_TRUE(S.A().has_value());
+  ASSERT_TRUE(S.b().has_value());
+  EXPECT_TRUE(CompareMatrices(S.A().value(), A, kTol));
+  EXPECT_TRUE(CompareMatrices(S.b().value(), b, kTol));
+
   const Vector2d in{-0.6, 0.08};
   EXPECT_TRUE(S.PointInSet(in, kTol));
   ASSERT_TRUE(S.MaybeGetPoint().has_value());

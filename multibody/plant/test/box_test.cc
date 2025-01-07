@@ -3,10 +3,11 @@
 
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/geometry/scene_graph.h"
+#include "drake/multibody/contact_solvers/sap/sap_solver.h"
 #include "drake/multibody/parsing/parser.h"
+#include "drake/multibody/plant/compliant_contact_manager.h"
 #include "drake/multibody/plant/multibody_plant.h"
 #include "drake/multibody/tree/prismatic_joint.h"
 #include "drake/multibody/tree/rigid_body.h"
@@ -17,6 +18,8 @@
 
 namespace drake {
 
+using drake::multibody::contact_solvers::internal::SapSolverParameters;
+using drake::multibody::internal::CompliantContactManager;
 using geometry::Box;
 using geometry::SceneGraph;
 using multibody::Parser;
@@ -40,9 +43,8 @@ class SlidingBoxTest : public ::testing::Test {
   // Creates a MultibodyPlant model with the given `discrete_period`
   // (discrete_period = 0 for a continuous model), runs a simulation to reach
   // steady state, and verifies contact results.
-  void RunSimulationToSteadyStateAndVerifyContactResults(
-      double discrete_period) {
-    auto diagram = MakeBoxDiagram(discrete_period);
+  void RunSimulationToSteadyStateAndVerifyContactResults(double time_step) {
+    auto diagram = MakeBoxDiagram(time_step);
     const auto& plant = dynamic_cast<const MultibodyPlant<double>&>(
         diagram->GetSubsystemByName("plant"));
 
@@ -144,7 +146,7 @@ class SlidingBoxTest : public ::testing::Test {
     // simulation to set the new context. Thus contact results evaluation in the
     // following test is completely independent from the simulation above
     // (besides of course the initial condition).
-    auto diagram2 = MakeBoxDiagram(discrete_period);
+    auto diagram2 = MakeBoxDiagram(time_step);
     const auto& plant2 = dynamic_cast<const MultibodyPlant<double>&>(
         diagram2->GetSubsystemByName("plant"));
     std::unique_ptr<Context<double>> diagram_context2 =
@@ -155,19 +157,21 @@ class SlidingBoxTest : public ::testing::Test {
     // Set the state from the computed solution.
     plant2.SetPositionsAndVelocities(
         &plant_context2, plant.GetPositionsAndVelocities(plant_context));
+    // Take a step so that the sampled output ports will update.
+    diagram2->ExecuteForcedEvents(diagram_context2.get());
     VerifyContactResults(plant2, plant_context2);
   }
 
-  // Creates a MultibodyPlant model with the given `discrete_period`
-  // (discrete_period = 0 for a continuous model).
+  // Creates a MultibodyPlant model with the given `time_step` (time_step = 0
+  // for a continuous model).
   std::unique_ptr<Diagram<double>> MakeBoxDiagram(double time_step) {
     DiagramBuilder<double> builder;
-    const std::string full_name =
-        FindResourceOrThrow("drake/multibody/plant/test/box.sdf");
     MultibodyPlant<double>& plant = AddMultibodyPlantSceneGraph(
         &builder, std::make_unique<MultibodyPlant<double>>(time_step));
+
     plant.set_name("plant");
-    Parser(&plant).AddModels(full_name);
+    Parser(&plant).AddModelsFromUrl(
+        "package://drake/multibody/plant/test/box.sdf");
 
     // Add gravity to the model.
     plant.mutable_gravity_field().set_gravity_vector(-g_ *
@@ -175,9 +179,23 @@ class SlidingBoxTest : public ::testing::Test {
 
     plant.Finalize();  // Done creating the model.
 
-    // Set contact parameters.
-    plant.set_penetration_allowance(penetration_allowance_);
-    plant.set_stiction_tolerance(stiction_tolerance_);
+    // For testing purposes, we set the discrete update manager programmatically
+    // so that we gain fine control over the simulation accuracy, allowing us to
+    // specify testing tolerances consistent with the solver accuracy.
+    if (plant.is_discrete()) {
+      auto owned_contact_manager =
+          std::make_unique<CompliantContactManager<double>>();
+      CompliantContactManager<double>* contact_manager =
+          owned_contact_manager.get();
+      plant.SetDiscreteUpdateManager(std::move(owned_contact_manager));
+      // This only applies when using the SAP solver.
+      EXPECT_TRUE(plant.get_discrete_contact_solver() ==
+                  DiscreteContactSolver::kSap);
+      SapSolverParameters sap_parameters;
+      // The tolerance must be tighter than the desired accuracy of the results.
+      sap_parameters.rel_tolerance = kTolerance / 10.0;
+      contact_manager->set_sap_solver_parameters(sap_parameters);
+    }
 
     // And build the Diagram:
     return builder.Build();
@@ -197,19 +215,20 @@ class SlidingBoxTest : public ::testing::Test {
   const double stiction_tolerance_{1.0e-4};     // in meters per second.
   const double applied_force_{5.0};             // Force in Newtons.
 
-  // Tolerance used to verify the results.
-  // Since the contact solver uses a continuous ODE to model Coulomb friction
-  // (a modified Stribeck model), we simulate for a long enough time to reach
-  // a "steady state". Therefore the precision of the results in these tests
-  // is dominated for "how well we reached steady state".
-  const double kTolerance{1.0e-12};
+  // Tolerance used to verify the results. With regularized friction and
+  // compliance, the precision of the results in these tests will depend on "how
+  // well we reached steady state". However, a more accurate steady state would
+  // also require longer simulation times and thus a more expensive test.
+  // Therefore we determined this value as a trade-off between the the accuracy
+  // of the steady state and computational cost.
+  const double kTolerance{4.0e-12};
 };
 
-TEST_F(SlidingBoxTest, ContinuousModel) {
+TEST_F(SlidingBoxTest, DiscreteModel) {
   RunSimulationToSteadyStateAndVerifyContactResults(1.0e-3);
 }
 
-TEST_F(SlidingBoxTest, DiscreteModel) {
+TEST_F(SlidingBoxTest, ContinuousModel) {
   RunSimulationToSteadyStateAndVerifyContactResults(0.0);
 }
 

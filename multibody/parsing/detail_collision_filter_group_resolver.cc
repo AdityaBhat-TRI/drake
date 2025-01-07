@@ -57,6 +57,7 @@ void CollisionFilterGroupResolver::AddGroup(
   }
 
   geometry::GeometrySet geometry_set;
+  std::set<std::string> full_names;
   for (const auto& body_name : body_names) {
     DRAKE_DEMAND(!body_name.empty());
     const ScopedName scoped_body_name =
@@ -78,10 +79,10 @@ void CollisionFilterGroupResolver::AddGroup(
                                    scoped_body_name));
       continue;
     }
-
+    full_names.insert(std::string(scoped_body_name.get_full()));
     geometry_set.Add(plant_->GetBodyFrameIdOrThrow(body->index()));
   }
-  groups_.insert({full_group_name, geometry_set});
+  groups_.insert({full_group_name, {full_names, geometry_set}});
 
   // Group insertions get computed at resolution time. Here we build the
   // directed graph of insertions, where edges point from the source group (the
@@ -127,7 +128,8 @@ void CollisionFilterGroupResolver::AddPair(
   pairs_.insert({name_a, name_b});
 }
 
-void CollisionFilterGroupResolver::Resolve(const DiagnosticPolicy& diagnostic) {
+CollisionFilterGroupsImpl<InstancedName> CollisionFilterGroupResolver::Resolve(
+    const DiagnosticPolicy& diagnostic) {
   DRAKE_DEMAND(!is_resolved_);
   is_resolved_ = true;
 
@@ -148,8 +150,8 @@ void CollisionFilterGroupResolver::Resolve(const DiagnosticPolicy& diagnostic) {
   // stable.
   std::set<std::string> ordered_names;
   std::vector<std::string> bad_names;
-  for (const auto& item : group_insertion_graph_) {
-    ordered_names.insert(item.first);
+  for (const auto& [name, member_groups] : group_insertion_graph_) {
+    ordered_names.insert(name);
   }
   for (const auto& name : ordered_names) {
     if (!FindGroup(diagnostic, name)) {
@@ -179,9 +181,11 @@ void CollisionFilterGroupResolver::Resolve(const DiagnosticPolicy& diagnostic) {
   for (auto it = sccs.rbegin(); it != sccs.rend(); ++it) {
     const auto& scc = *it;
     // The content to insert is the union of the SCC's members' contents.
-    GeometrySet contents_union;
+    GroupData contents_union;
     for (const auto& node : scc) {
-      contents_union.Add(groups_[node]);
+      contents_union.geometries.Add(groups_[node].geometries);
+      const auto& names = groups_[node].body_names;
+      contents_union.body_names.insert(names.begin(), names.end());
     }
 
     // The destinations are the the union of the SCC's' members' successors,
@@ -194,20 +198,53 @@ void CollisionFilterGroupResolver::Resolve(const DiagnosticPolicy& diagnostic) {
 
     // Do the insertions.
     for (const auto& destination : destinations) {
-      groups_[destination].Add(contents_union);
+      groups_[destination].geometries.Add(contents_union.geometries);
+      const auto& names = contents_union.body_names;
+      groups_[destination].body_names.insert(names.begin(), names.end());
     }
   }
 
-  // Now that the groups are complete, evaluate the pairs into plant rules.
-  for (const auto& [name_a, name_b] : pairs_) {
-    const GeometrySet* set_a = FindGroup(diagnostic, name_a);
-    const GeometrySet* set_b = FindGroup(diagnostic, name_b);
+  // Now that the groups are complete, evaluate the pairs into plant
+  // rules. Remove any pairs with broken names.
+  std::set<SortedPair<std::string>> bad_pairs;
+  for (const auto& pair : pairs_) {
+    const auto& [name_a, name_b] = pair;
+    const GroupData* set_a = FindGroup(diagnostic, name_a);
+    const GroupData* set_b = FindGroup(diagnostic, name_b);
     if (set_a == nullptr || set_b == nullptr) {
+      bad_pairs.insert(pair);
       continue;
     }
     plant_->ExcludeCollisionGeometriesWithCollisionFilterGroupPair(
-        {name_a, *set_a}, {name_b, *set_b});
+        {name_a, set_a->geometries}, {name_b, set_b->geometries});
   }
+  for (const auto& pair : bad_pairs) {
+    pairs_.erase(pair);
+  }
+
+  // Return the info, so the Parser can report back to users.
+  CollisionFilterGroupsImpl<std::string> result;
+  for (const auto& [name, members] : groups_) {
+    result.AddGroup(name, members.body_names);
+  }
+  for (const auto& pair : pairs_) {
+    result.AddExclusionPair(pair);
+  }
+  return result.template Convert<InstancedName>(
+      [this](const std::string& input) {
+        InstancedName instanced_name;
+        auto scoped = ScopedName::Parse(input);
+        if (plant_->HasModelInstanceNamed(scoped.get_namespace())) {
+          instanced_name.index =
+              plant_->GetModelInstanceByName(scoped.get_namespace());
+        } else {
+          // If we fail this demand, we forgot to remove bad data before
+          // building the `result`.
+          DRAKE_DEMAND(scoped.get_namespace().empty());
+        }
+        instanced_name.name = scoped.get_element();
+        return instanced_name;
+      });
 }
 
 std::string CollisionFilterGroupResolver::FullyQualify(
@@ -221,7 +258,8 @@ std::string CollisionFilterGroupResolver::FullyQualify(
   return ScopedName::Join(model_name, name).to_string();
 }
 
-const GeometrySet* CollisionFilterGroupResolver::FindGroup(
+const CollisionFilterGroupResolver::GroupData*
+CollisionFilterGroupResolver::FindGroup(
     const DiagnosticPolicy& diagnostic, const std::string& group_name) const {
   auto iter = groups_.find(group_name);
   if (iter == groups_.end()) {

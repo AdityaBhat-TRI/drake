@@ -3,11 +3,13 @@
 #include <deque>
 #include <string>
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gtest/gtest.h>
 
 #include "drake/common/diagnostic_policy.h"
+#include "drake/common/drake_copyable.h"
 #include "drake/common/ssize.h"
-#include "drake/common/text_logging.h"
 
 namespace drake {
 namespace test {
@@ -34,31 +36,27 @@ class DiagnosticPolicyTestBase : public ::testing::Test {
         });
   }
 
-  ~DiagnosticPolicyTestBase() {
-    FlushDiagnostics();
-  }
+  ~DiagnosticPolicyTestBase() { FlushDiagnostics(); }
 
   /// Remove an error from internal records and return its formatted string.
   std::string TakeError() {
-    EXPECT_FALSE(error_records_.empty());
+    ScopedTrace trace;
+    SCOPED_TRACE("in TakeError()");
     return Take(&error_records_).FormatError();
   }
 
   /// Remove a warning from internal records and return its formatted string.
   std::string TakeWarning() {
-    EXPECT_FALSE(warning_records_.empty());
+    ScopedTrace trace;
+    SCOPED_TRACE("in TakeWarning()");
     return Take(&warning_records_).FormatWarning();
   }
 
   /// Return the current number of errors.
-  int NumErrors() {
-    return ssize(error_records_);
-  }
+  int NumErrors() { return ssize(error_records_); }
 
   /// Return the current number of warnings.
-  int NumWarnings() {
-    return ssize(warning_records_);
-  }
+  int NumWarnings() { return ssize(warning_records_); }
 
   // This resets the diagnostic collections so that lingering reports to not
   // pollute additional testing. All current reports are silently discarded.
@@ -71,11 +69,11 @@ class DiagnosticPolicyTestBase : public ::testing::Test {
   // test logic has finished. It also resets the collections so lingering
   // reports to not pollute additional testing.
   void FlushDiagnostics() {
+    ScopedTrace trace;
     EXPECT_TRUE(error_records_.empty()) << DumpErrors();
     EXPECT_TRUE(warning_records_.empty()) << DumpWarnings();
     ClearDiagnostics();
   }
-
 
  protected:
   std::string DumpErrors() {
@@ -101,46 +99,68 @@ class DiagnosticPolicyTestBase : public ::testing::Test {
 
   void RecordErrors() {
     diagnostic_policy_.SetActionForErrors(
-    [this](const DiagnosticDetail& detail) {
-      error_records_.push_back(detail);
-    });
+        [this](const DiagnosticDetail& detail) {
+          error_records_.push_back(detail);
+        });
   }
 
   // Returns the first error as a string (or else fails the test case,
   // if there were no errors).
   std::string FormatFirstError() {
+    ScopedTrace trace;
     if (error_records_.empty()) {
-      for (const auto& warning : warning_records_) {
-        log()->warn(warning.FormatWarning());
-      }
-      EXPECT_GT(error_records_.size(), 0)
-          << "FormatFirstError did not get any errors";
+      auto format_warnings = [this]() {
+        std::deque<std::string> warnings;
+        for (const auto& record : warning_records_) {
+          warnings.push_back(record.FormatWarning());
+        }
+        return warnings;
+      };
+      ADD_FAILURE() << fmt::format(
+          "FormatFirstError did not get any errors\n"
+          "found {} warnings:\n{}",
+          NumWarnings(), fmt::join(format_warnings(), "\n"));
       return {};
     }
     return error_records_[0].FormatError();
   }
 
-  // Returns the first warning as a string (or else fails the test case,
-  // if there were no warnings). Also fails if there were any errors.
-  std::string FormatFirstWarning() {
-    for (const auto& error : error_records_) {
-      log()->error(error.FormatError());
-    }
-    EXPECT_TRUE(error_records_.empty());
-    if (warning_records_.empty()) {
-      EXPECT_TRUE(warning_records_.size() > 0)
-          << "FormatFirstWarning did not get any warnings";
-      return {};
-    }
-    return warning_records_[0].FormatWarning();
-  }
-
   template <typename T>
   T Take(std::deque<T>* c) {
+    if (c->empty()) {
+      ADD_FAILURE() << "No messages to take!";
+      return {};
+    }
     T result = c->at(0);
     c->pop_front();
     return result;
   }
+
+  // Extend the gtest scoped tracing feature to give more context to failures
+  // found by the DiagnosticPolicyTestBase. When a failure is found in a scope
+  // containing a ScopedTrace instance, an extra message will give the file
+  // name, line number, and test name in the derived ("end user") unit test.
+  //
+  // Note that this differs from the SCOPED_TRACE() macro, which reports the
+  // source code location of itself. The mechanism here reports the source code
+  // location of the derived test case.
+  //
+  // For details of the gtest features used, see the following documentation:
+  // https://google.github.io/googletest/advanced.html#getting-the-current-tests-name
+  // https://google.github.io/googletest/advanced.html#adding-traces-to-assertions
+  class ScopedTrace {
+   public:
+    DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ScopedTrace);
+    ScopedTrace() = default;
+
+   private:
+    const testing::TestInfo* const test_info_{
+        testing::UnitTest::GetInstance()->current_test_info()};
+    ::testing::ScopedTrace trace_{
+        test_info_->file(), test_info_->line(),
+        fmt::format("{}.{}", test_info_->test_suite_name(),
+                    test_info_->name())};
+  };
 
   std::deque<DiagnosticDetail> error_records_;
   std::deque<DiagnosticDetail> warning_records_;

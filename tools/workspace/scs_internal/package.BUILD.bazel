@@ -1,7 +1,7 @@
 # -*- bazel -*-
 
-load("@drake//tools/skylark:cc.bzl", "cc_library")
 load("@drake//tools/install:install.bzl", "install")
+load("@drake//tools/skylark:cc.bzl", "cc_library")
 
 licenses(["notice"])  # MIT
 
@@ -40,14 +40,16 @@ cc_library(
     ],
     copts = [
         "-fvisibility=hidden",
-        "-fno-openmp",
         "-w",
         "-Werror=incompatible-pointer-types",
+        # We don't allow Drake externals to use OpenMP until we wire up "max
+        # parallelism" governance to a drake::Parallellism public API option.
+        "-fno-openmp",
     ],
     linkstatic = 1,
     linkopts = select({
         ":linux": ["-lrt"],
-        "@//conditions:default": [],
+        "//conditions:default": [],
     }),
     deps = [
         "@blas",

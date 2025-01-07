@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <thread>
@@ -35,6 +36,8 @@ using Eigen::Vector3d;
 using math::RigidTransformd;
 using math::RotationMatrixd;
 
+namespace fs = std::filesystem;
+
 // Returns an offset pointer inside message that skips over leading newlines.
 const char* ltrim(const char* message) {
   while (*message == '\n') {
@@ -43,24 +46,82 @@ const char* ltrim(const char* message) {
   return message;
 }
 
+// Loads the textured cuboctahedron with hole into an in-memory Mesh.
+Mesh GetCuboctahedronInMemory(double scale) {
+  const fs::path obj_path = FindResourceOrThrow(
+      "drake/examples/scene_graph/cuboctahedron_with_hole.obj");
+  const fs::path obj_dir = obj_path.parent_path();
+  string_map<FileSource> supporting_files;
+  for (const auto* f : {"cuboctahedron_with_hole.mtl", "rainbow_checker.png"}) {
+    supporting_files.emplace(f, MemoryFile::Make(std::move(obj_dir / f)));
+  }
+  return Mesh(
+      InMemoryMesh{MemoryFile::Make(obj_path), std::move(supporting_files)},
+      scale);
+}
+
+// Loads the fully_textured_pyramid.gltf file as an in-memory mesh.
+Mesh GetPyramidInMemory(double scale = 1.0) {
+  const fs::path gltf_path = FindResourceOrThrow(
+      "drake/geometry/render/test/meshes/fully_textured_pyramid.gltf");
+  const fs::path gltf_dir = gltf_path.parent_path();
+  string_map<FileSource> supporting_files;
+  // These are _all_ the files referenced in fully_textured_pyramid.gltf. Only
+  // the ktx2 images will render, but the console will complain about not being
+  // able to find the .png images if we don't include them as supporting files.
+  // We'll add the ktx2 files as path FileSources to test both representations
+  // (MemoryFile and path).
+  bool have_paths = false;
+  for (const auto* f :
+       {"fully_textured_pyramid_emissive.png",
+        "fully_textured_pyramid_normal.png", "fully_textured_pyramid_omr.png",
+        "fully_textured_pyramid_base_color.png",
+        "fully_textured_pyramid_emissive.ktx2",
+        "fully_textured_pyramid_normal.ktx2", "fully_textured_pyramid_omr.ktx2",
+        "fully_textured_pyramid_base_color.ktx2",
+        "fully_textured_pyramid.bin"}) {
+    const std::string f_name(f);
+    if (f_name.ends_with(".ktx2")) {
+      supporting_files.emplace(f, gltf_dir / f);
+      have_paths = true;
+    } else {
+      supporting_files.emplace(f, MemoryFile::Make(std::move(gltf_dir / f)));
+    }
+  }
+  // Make sure there's not some erroneous logic in putting the ktx2 files in as
+  // path FileSource.
+  DRAKE_DEMAND(have_paths);
+
+  return Mesh(
+      InMemoryMesh{MemoryFile::Make(gltf_path), std::move(supporting_files)},
+      scale);
+}
+
 int do_main() {
   auto meshcat = std::make_shared<Meshcat>();
 
-  // For every two items we add to the initial array, decrement start_x by one
+  // For every items we add to the initial array, decrement start_x by one half
   // to keep things centered.
   // Use ++x as the x-position of new items.
-  const double start_x = -8;
+  const double start_x = -8.5;
   double x = start_x;
 
   Vector3d sphere_home{++x, 0, 0};
-  meshcat->SetObject("sphere", Sphere(0.25), Rgba(1.0, 0, 0, 1));
-  meshcat->SetTransform("sphere", RigidTransformd(sphere_home));
+  // The weird name for the sphere is to confirm that meshcat collapses
+  // redundant slashes. We'll subsequently refer to it without the slash to
+  // make sure they're equivalent.
+  meshcat->SetObject("sphere//scoped_name", Sphere(0.25), Rgba(1.0, 0, 0, 1));
+  meshcat->SetTransform("sphere/scoped_name", RigidTransformd(sphere_home));
   // Note: this isn't the preferred means for setting opacity, but it is the
   // simplest way to exercise chained property names.
-  meshcat->SetProperty("sphere/<object>", "material.opacity", 0.5);
-  meshcat->SetProperty("sphere/<object>", "material.transparent", true);
+  meshcat->SetProperty("sphere/scoped_name/<object>", "material.opacity", 0.5);
+  meshcat->SetProperty("sphere/scoped_name/<object>", "material.transparent",
+                       true);
 
-  meshcat->SetObject("cylinder", Cylinder(0.25, 0.5), Rgba(0.0, 1.0, 0, 1));
+  // The weird name for the cylinder is to confirm that meshcat elides terminal
+  // slashes. We'll subsequently refer to it without the slash to make sure
+  // they're equivalent.
+  meshcat->SetObject("cylinder/", Cylinder(0.25, 0.5), Rgba(0.0, 1.0, 0, 1));
   meshcat->SetTransform("cylinder", RigidTransformd(Vector3d{++x, 0, 0}));
 
   // For animation, we'll aim the camera between the cylinder and ellipsoid.
@@ -74,6 +135,16 @@ int do_main() {
   meshcat->SetObject("box", Box(0.25, 0.25, 0.5), Rgba(0, 0, 1, 1));
   meshcat->SetTransform("box", RigidTransformd(box_home));
 
+  const std::string polytope_with_hole = FindResourceOrThrow(
+      "drake/examples/scene_graph/cuboctahedron_with_hole.obj");
+  meshcat->SetObject("obj_as_convex", Convex(polytope_with_hole, 0.25),
+                     Rgba(0.8, 0.4, 0.1, 1.0));
+  meshcat->SetTransform("obj_as_convex", RigidTransformd(Vector3d{++x, 0, 0}));
+
+  meshcat->SetObject("obj_as_mesh", Mesh(polytope_with_hole, 0.25),
+                     Rgba(0.8, 0.4, 0.1, 1.0));
+  meshcat->SetTransform("obj_as_mesh", RigidTransformd(Vector3d{x, 1, 0}));
+
   meshcat->SetObject("capsule", Capsule(0.25, 0.5), Rgba(0, 1, 1, 1));
   meshcat->SetTransform("capsule", RigidTransformd(Vector3d{++x, 0, 0}));
 
@@ -84,10 +155,15 @@ int do_main() {
   // The color and shininess properties come from PBR materials.
   meshcat->SetObject(
       "gltf",
-      Mesh(FindResourceOrThrow("drake/geometry/render/test/meshes/cube1.gltf"),
-           0.25));
+      Mesh(FindResourceOrThrow(
+               "drake/geometry/render/test/meshes/fully_textured_pyramid.gltf"),
+           0.5));
   const Vector3d gltf_pose{++x, 0, 0};
   meshcat->SetTransform("gltf", RigidTransformd(gltf_pose));
+
+  meshcat->SetObject("gltf_in_memory", GetPyramidInMemory(0.5));
+  meshcat->SetTransform("gltf_in_memory",
+                        RigidTransformd(gltf_pose + Vector3d(0, 1.5, 0)));
 
   auto mustard_obj =
       FindRunfile("drake_models/ycb/meshes/006_mustard_bottle_textured.obj")
@@ -240,9 +316,13 @@ Ignore those for now; we'll need to circle back and fix them later.
   - a green cylinder (with the long axis in z)
   - a pink semi-transparent ellipsoid (long axis in z)
   - a blue box (long axis in z)
+  - an orange polytope (with a similary shaped textured polytope behind it).
+    The textured shape has a hole through. The orange polytope is its convex
+    hull.
   - a teal capsule (long axis in z)
   - a red cone (expanding in +z, twice as wide in y than in x)
-  - a shiny, green, dented cube (created with a PBR material)
+  - two shiny, textured pyramids (created with PBR materials); one read from
+    disk, the other loaded from memory.
   - a yellow mustard bottle w/ label
   - a dense rainbow point cloud in a box (long axis in z)
   - a blue line coiling up (in z).
@@ -266,10 +346,12 @@ Ignore those for now; we'll need to circle back and fix them later.
                "geometries:\n";
   MeshcatAnimation animation;
   std::cout << "- the red sphere should move up and down in z.\n";
-  animation.SetTransform(0, "sphere", RigidTransformd(sphere_home));
-  animation.SetTransform(20, "sphere",
+  animation.SetTransform(0, "sphere/scoped_name",
+                         RigidTransformd(sphere_home));
+  animation.SetTransform(20, "sphere/scoped_name",
                          RigidTransformd(sphere_home + Vector3d::UnitZ()));
-  animation.SetTransform(40, "sphere", RigidTransformd(sphere_home));
+  animation.SetTransform(40, "sphere/scoped_name",
+                         RigidTransformd(sphere_home));
 
   std::cout << "- the blue box should spin clockwise about the +z axis.\n";
   animation.SetTransform(
@@ -346,9 +428,9 @@ Ignore those for now; we'll need to circle back and fix them later.
 
   std::cout << "- An environment map has been loaded from a png -- the Cornell "
             << "box.\n"
-            << "  The dented green box should reflect it (the camera has moved "
-            << "to focus on the box). This may not be apparent until after you "
-            << "move the mouse.\n";
+            << "  The shiny pyramids should reflect it (the camera has moved "
+            << "to focus on the pyramids). This may not be apparent until "
+            << "after you move the mouse.\n";
   MaybePauseForUser();
 
   meshcat->SetEnvironmentMap(
@@ -427,9 +509,9 @@ Ignore those for now; we'll need to circle back and fix them later.
     auto [plant, scene_graph] =
         multibody::AddMultibodyPlantSceneGraph(&builder, 0.001);
     multibody::Parser parser(&plant);
-    parser.AddModels(
-        FindResourceOrThrow("drake/manipulation/models/iiwa_description/urdf/"
-                            "iiwa14_spheres_collision.urdf"));
+    parser.AddModelsFromUrl(
+        "package://drake_models/iiwa_description/urdf/"
+        "iiwa14_spheres_collision.urdf");
     plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
     parser.AddModels(FindResourceOrThrow(
         "drake/examples/kuka_iiwa_arm/models/table/"
@@ -437,6 +519,11 @@ Ignore those for now; we'll need to circle back and fix them later.
     const double table_height = 0.7645;
     plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("link"),
                      RigidTransformd(Vector3d{0, 0, -table_height - 0.01}));
+    parser.AddModelsFromUrl(
+        "package://drake_models/ycb/006_mustard_bottle.sdf");
+    plant.WeldFrames(plant.world_frame(),
+                     plant.GetFrameByName("base_link_mustard"),
+                     RigidTransformd(Vector3d{0, -0.3, 0.01}));
     plant.Finalize();
 
     builder.ExportInput(plant.get_actuation_input_port(), "actuation_input");
@@ -456,7 +543,8 @@ Ignore those for now; we'll need to circle back and fix them later.
 
     diagram->ForcedPublish(*context);
     std::cout
-        << "- Now you should see a kuka model (from MultibodyPlant/SceneGraph)"
+        << "- Now you should see a kuka model (from MultibodyPlant/SceneGraph) "
+           "and a mustard bottle lying on its side, with the label facing up."
         << std::endl;
 
     MaybePauseForUser();
@@ -480,12 +568,24 @@ Ignore those for now; we'll need to circle back and fix them later.
     MaybePauseForUser();
   }
 
-  std::cout << "Now we'll add back an environment map and move the camera, in\n"
-               "preparation for testing the standalone HTML download ...\n\n";
+  std::cout << "Now we'll add back some elements in preparation for testing\n"
+               "the standalone HTML download:\n"
+               "  - an environment map\n"
+               "  - reposition the camera\n"
+               "  - add an in-memory glTF file (textured pyramid)\n"
+               "  - add an in-memory obj file (textured cuboctahedron)\n"
+               "\n";
 
   meshcat->SetEnvironmentMap(
       FindResourceOrThrow("drake/geometry/test/env_256_cornell_box.png"));
   meshcat->SetCameraTarget(Vector3d{-0.4, 0, 0});
+
+  meshcat->SetObject("gltf_in_memory", GetPyramidInMemory(0.1));
+  meshcat->SetTransform("gltf_in_memory",
+                        RigidTransformd(Vector3d(0.25, 0.3, 0.1)));
+  meshcat->SetObject("obj_in_memory", GetCuboctahedronInMemory(0.1));
+  meshcat->SetTransform("obj_in_memory",
+                        RigidTransformd(Vector3d(-0.25, 0.3, 0.1)));
 
   std::cout
       << "Now we'll check the standalone HTML file capturing this scene.\n"
@@ -495,6 +595,7 @@ Ignore those for now; we'll need to circle back and fix them later.
          "- the camera is focused on the contact point between the robot and "
          "table,\n"
          "- the iiwa is visible,\n"
+         "- the mustard bottle visible including its texture (front label),\n"
          "- the animation plays,\n"
          "- the environment map is present, and\n"
          "- the browser Console has no warnings nor errors\n"
@@ -618,7 +719,7 @@ Ignore those for now; we'll need to circle back and fix them later.
 
   std::cout << "Exiting..." << std::endl;
   return 0;
-}
+}  // NOLINT(readability/fn_size)
 
 }  // namespace
 }  // namespace geometry

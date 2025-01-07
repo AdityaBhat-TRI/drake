@@ -21,33 +21,13 @@ template <typename T>
 DerivativeTrajectory<T>::~DerivativeTrajectory() = default;
 
 template <typename T>
-std::unique_ptr<Trajectory<T>> DerivativeTrajectory<T>::Clone() const {
+std::unique_ptr<Trajectory<T>> DerivativeTrajectory<T>::DoClone() const {
   return std::make_unique<DerivativeTrajectory>(*nominal_, derivative_order_);
 }
 
 template <typename T>
-MatrixX<T> DerivativeTrajectory<T>::value(const T& t) const {
+MatrixX<T> DerivativeTrajectory<T>::do_value(const T& t) const {
   return nominal_->EvalDerivative(t, derivative_order_);
-}
-
-template <typename T>
-Eigen::Index DerivativeTrajectory<T>::rows() const {
-  return rows_;
-}
-
-template <typename T>
-Eigen::Index DerivativeTrajectory<T>::cols() const {
-  return cols_;
-}
-
-template <typename T>
-T DerivativeTrajectory<T>::start_time() const {
-  return nominal_->start_time();
-}
-
-template <typename T>
-T DerivativeTrajectory<T>::end_time() const {
-  return nominal_->end_time();
 }
 
 template <typename T>
@@ -63,8 +43,28 @@ std::unique_ptr<Trajectory<T>> DerivativeTrajectory<T>::DoMakeDerivative(
       *nominal_, derivative_order_ + derivative_order);
 }
 
+template <typename T>
+Eigen::Index DerivativeTrajectory<T>::do_rows() const {
+  return rows_;
+}
+
+template <typename T>
+Eigen::Index DerivativeTrajectory<T>::do_cols() const {
+  return cols_;
+}
+
+template <typename T>
+T DerivativeTrajectory<T>::do_start_time() const {
+  return nominal_->start_time();
+}
+
+template <typename T>
+T DerivativeTrajectory<T>::do_end_time() const {
+  return nominal_->end_time();
+}
+
 }  // namespace trajectories
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::DerivativeTrajectory)
+    class drake::trajectories::DerivativeTrajectory);

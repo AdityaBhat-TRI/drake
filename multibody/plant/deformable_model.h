@@ -33,12 +33,21 @@ class MultibodyPlant;
 template <typename T>
 class DeformableModel final : public multibody::PhysicalModel<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DeformableModel)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DeformableModel);
 
-  /** Constructs a DeformableModel to be owned by the given MultibodyPlant.
+  // TODO(xuchenhan-tri): The prerequisite isn't very precise. It's ok to call
+  // the constructor in the middle of finalizing a plant, as long as this
+  // DeformableModel has a chance to declare the system resources it needs.
+  // Consider making the constructor private and only allow construction via
+  // plant.AddDeformableModel().
+  /** (Internal only) Constructs a DeformableModel to be owned by the given
+   MultibodyPlant. This constructor is only intended to be called internally by
+   %MultibodyPlant.
    @pre plant != nullptr.
    @pre Finalize() has not been called on `plant`. */
   explicit DeformableModel(MultibodyPlant<T>* plant);
+
+  ~DeformableModel() final;
 
   /** Returns the number of deformable bodies registered with this
    DeformableModel. */
@@ -62,6 +71,8 @@ class DeformableModel final : public multibody::PhysicalModel<T> {
                                  corresponds to a typical edge length in the
                                  resulting mesh for a primitive shape.
    @pre resolution_hint > 0.
+   @throws std::exception if `this` %DeformableModel is not of scalar type
+   double.
    @throws std::exception if Finalize() has been called on the multibody plant
    owning this deformable model. */
   DeformableBodyId RegisterDeformableBody(
@@ -126,6 +137,8 @@ class DeformableModel final : public multibody::PhysicalModel<T> {
            Sphere.
    @throws std::exception if Finalize() has been called on the multibody plant
            owning this deformable model.
+   @throws std::exception if `this` %DeformableModel is not of scalar type
+           double.
    @throws std::exception if no constraint is added (i.e. no vertex of the
            deformable body is inside the given `shape` with the given poses). */
   MultibodyConstraintId AddFixedConstraint(
@@ -142,6 +155,8 @@ class DeformableModel final : public multibody::PhysicalModel<T> {
 
   /** Registers an external force density field that applies external force to
    all deformable bodies.
+   @throws std::exception if `this` %DeformableModel is not of scalar type
+           double.
    @throws std::exception if Finalize() has been called on the multibody plant
            owning this deformable model. */
   void AddExternalForce(std::unique_ptr<ForceDensityField<T>> external_force);
@@ -158,6 +173,52 @@ class DeformableModel final : public multibody::PhysicalModel<T> {
    model. */
   const std::vector<const ForceDensityField<T>*>& GetExternalForces(
       DeformableBodyId id) const;
+
+  // TODO(xuchenhan-tri): filter collisions for the disabled deformable body's
+  // geometry.
+  /** Disables the deformable body with the given `id` in the given context.
+   Disabling a deformable body sets its vertex velocities and accelerations to
+   zero and freezes its vertex positions. A disabled deformable body is not
+   subject to any constraint (e.g. frictional contact constraint or fixed
+   constraint); it does not move under the influence of external forces
+   (e.g. gravity); and it does not necessarily satisfy the prescribed boundary
+   condition (if any). On the flip side, a disabled deformable body does not
+   affect the dynamics of other bodies, even if the collision between the
+   disabled body's geometry and other geometries is not filtered. Effectively,
+   the physics of the deformable body stop being computed. The deformable body
+   can be enabled by calling Enable(). Calling Disable() on a body which is
+   already disabled has no effect.
+   @see Enable().
+   @throw std::exception if the passed in context isn't compatible with the
+   MultibodyPlant associated with this %DeformableModel.
+   @throw std::exception if a deformable body with the given id is not
+   registered.
+   @throw std::exception if context is null. */
+  void Disable(DeformableBodyId id, systems::Context<T>* context) const;
+
+  /** Enables the deformable body with the given `id` in the given context.
+   Calling Enable() on a body which is already enabled has no effect.
+   @see Disable().
+   @throw std::exception if the passed in context isn't compatible with the
+   MultibodyPlant associated with this %DeformableModel.
+   @throw std::exception if a deformable body with the given id is not
+   registered.
+   @throw std::exception if context is null. */
+  void Enable(DeformableBodyId id, systems::Context<T>* context) const;
+
+  /** @return true if and only if the deformable body with the given id is
+   enabled.
+   @throw std::exception if the passed in context isn't compatible with the
+   MultibodyPlant associated with this %DeformableModel.
+   @throw std::exception if a deformable body with the given id is not
+   registered. */
+  bool is_enabled(DeformableBodyId id,
+                  const systems::Context<T>& context) const {
+    ThrowUnlessRegistered(__func__, id);
+    this->plant().ValidateContext(context);
+    return context.get_parameters().template get_abstract_parameter<bool>(
+        is_enabled_parameter_indexes_.at(id));
+  }
 
   /** Returns the FemModel for the body with `id`.
    @throws exception if no deformable body with `id` is registered with `this`
@@ -222,38 +283,72 @@ class DeformableModel final : public multibody::PhysicalModel<T> {
     return body_id_to_constraint_ids_.at(id);
   }
 
-  /** Returns the output port of the vertex positions for all registered
-   deformable bodies.
-   @throws std::exception if MultibodyPlant::Finalize() has not been called yet.
+  /** Returns the output port index of the vertex positions port for all
+   registered deformable bodies.
+   @throws std::exception if called before `DeclareSceneGraphPorts()` is called.
   */
-  const systems::OutputPort<T>& vertex_positions_port() const {
-    this->ThrowIfSystemResourcesNotDeclared(__func__);
-    return plant_->get_output_port(vertex_positions_port_index_);
+  systems::OutputPortIndex configuration_output_port_index() const {
+    DRAKE_DEMAND(configuration_output_port_index_.is_valid());
+    return configuration_output_port_index_;
   }
 
+  /** Returns true if there's no deformable body or external force registered to
+   `this` %DeformableModel. */
+  bool is_empty() const {
+    return body_ids_.empty() && force_densities_.empty();
+  }
+
+  bool is_cloneable_to_double() const final { return true; }
+
+  /** Returns true if and only if this %DeformableModel is empty. */
+  bool is_cloneable_to_autodiff() const final { return is_empty(); }
+
+  /** Returns true if and only if this %DeformableModel is empty. */
+  bool is_cloneable_to_symbolic() const final { return is_empty(); }
+
  private:
+  /* Allow different specializations to access each other's private data for
+   scalar conversion. */
+  template <typename U>
+  friend class DeformableModel;
+
   PhysicalModelPointerVariant<T> DoToPhysicalModelPointerVariant() const final {
     return PhysicalModelPointerVariant<T>(this);
   }
 
-  // TODO(xuchenhan-tri): Implement CloneToDouble() and CloneToAutoDiffXd()
-  // and the corresponding is_cloneable methods.
+  std::unique_ptr<PhysicalModel<double>> CloneToDouble(
+      MultibodyPlant<double>* plant) const final;
 
-  void DoDeclareSystemResources(MultibodyPlant<T>* plant) final;
+  /* Since %DeformableModel is only cloneable to AutoDiffXd if the model is
+   empty, the clone simply returns an empty model. */
+  std::unique_ptr<PhysicalModel<AutoDiffXd>> CloneToAutoDiffXd(
+      MultibodyPlant<AutoDiffXd>* plant) const final;
+
+  /* Since %DeformableModel is only cloneable to symbolic if the model is
+   empty, the clone simply returns an empty model. */
+  std::unique_ptr<PhysicalModel<symbolic::Expression>> CloneToSymbolic(
+      MultibodyPlant<symbolic::Expression>* plant) const final;
+
+  void DoDeclareSystemResources() final;
+
+  void DoDeclareSceneGraphPorts() final;
 
   /* Builds a FEM model for the body with `id` with linear tetrahedral elements
    and a single quadrature point. The reference positions as well as the
    connectivity of the elements are given by `mesh`, and physical properties
    such as the material model of the body are given by `config`.
    @throws exception if an FEM model corresponding to `id` already exists. */
-  void BuildLinearVolumetricModel(DeformableBodyId id,
-                                  const geometry::VolumeMesh<double>& mesh,
-                                  const fem::DeformableBodyConfig<T>& config);
+  template <typename T1 = T>
+  typename std::enable_if_t<std::is_same_v<T1, double>, void>
+  BuildLinearVolumetricModel(DeformableBodyId id,
+                             const geometry::VolumeMesh<double>& mesh,
+                             const fem::DeformableBodyConfig<T>& config);
 
-  template <template <class, int> class Model>
-  void BuildLinearVolumetricModelHelper(
-      DeformableBodyId id, const geometry::VolumeMesh<double>& mesh,
-      const fem::DeformableBodyConfig<T>& config);
+  template <template <class> class Model, typename T1 = T>
+  typename std::enable_if_t<std::is_same_v<T1, double>, void>
+  BuildLinearVolumetricModelHelper(DeformableBodyId id,
+                                   const geometry::VolumeMesh<double>& mesh,
+                                   const fem::DeformableBodyConfig<T>& config);
 
   /* Copies the vertex positions of all deformable bodies to the output port
    value which is guaranteed to be of type GeometryConfigurationVector. */
@@ -262,24 +357,31 @@ class DeformableModel final : public multibody::PhysicalModel<T> {
 
   /* Helper to throw a useful message if a deformable body with the given `id`
    doesn't exist. */
-  void ThrowUnlessRegistered(const char* source_method,
+  void ThrowUnlessRegistered(const char* function_name,
                              DeformableBodyId id) const;
 
-  /* The MultibodyPlant that owns `this` DeformableModel. */
-  MultibodyPlant<T>* plant_{nullptr};
+  /* Helper to throw a useful message if the given `function_name` is called on
+   a DeformableModel that doesn't have scalar type double. */
+  void ThrowIfNotDouble(const char* function_name) const;
+
+  /* Data members. WARNING: if you add a field here be sure to update
+   CloneToDouble() to make sure all fields are copied. */
   /* The positions of each vertex of deformable body at reference configuration.
    */
   std::unordered_map<DeformableBodyId, VectorX<T>> reference_positions_;
   /* The discrete state indexes for all deformable bodies. */
   std::unordered_map<DeformableBodyId, systems::DiscreteStateIndex>
       discrete_state_indexes_;
+  /* System parameter index for the enable states for each deformable body. */
+  std::unordered_map<DeformableBodyId, systems::AbstractParameterIndex>
+      is_enabled_parameter_indexes_;
   std::unordered_map<DeformableBodyId, geometry::GeometryId>
       body_id_to_geometry_id_;
   std::unordered_map<geometry::GeometryId, DeformableBodyId>
       geometry_id_to_body_id_;
   std::unordered_map<DeformableBodyId, std::unique_ptr<fem::FemModel<T>>>
       fem_models_;
-  /*The collection all external forces. */
+  /* The collection all external forces. */
   std::vector<std::unique_ptr<ForceDensityField<T>>> force_densities_;
   /* body_index_to_force_densities_[i] is the collection of pointers to external
    forces applied to body i. */
@@ -293,7 +395,7 @@ class DeformableModel final : public multibody::PhysicalModel<T> {
   std::vector<DeformableBodyId> body_ids_;
   std::map<MultibodyConstraintId, internal::DeformableRigidFixedConstraintSpec>
       fixed_constraint_specs_;
-  systems::OutputPortIndex vertex_positions_port_index_;
+  systems::OutputPortIndex configuration_output_port_index_;
 };
 
 }  // namespace multibody

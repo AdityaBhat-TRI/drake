@@ -11,7 +11,12 @@ import tarfile
 
 from datetime import datetime, timezone
 
-from .common import die, gripe, wheel_name
+from .common import (
+    create_snopt_tgz,
+    die, gripe,
+    strip_tar_metadata,
+    wheel_name,
+)
 from .common import resource_root, wheelhouse
 from .common import find_tests
 
@@ -40,8 +45,7 @@ targets = (
         python_version_tuple=(3, 11)),
     Target(
         build_platform=Platform('ubuntu', '22.04', 'jammy'),
-        # TODO(jwnimmer-tri) Switch the test to 24.04 once that's available.
-        test_platform=Platform('ubuntu', '23.10', 'mantic'),
+        test_platform=Platform('ubuntu', '24.04', 'noble'),
         python_version_tuple=(3, 12, 0),
         python_sha='795c34f44df45a0e9b9710c8c71c15c671871524cd412ca14def212e8ccb155d'),  # noqa
 )
@@ -85,6 +89,16 @@ def _cleanup():
         _docker('image', 'rm', *_images_to_remove)
 
 
+def _git_sha(path):
+    """
+    Determines the git SHA of the repository which contains or is rooted at the
+    specified `path`.
+    """
+    command = ['git', 'rev-parse', 'HEAD']
+    raw = subprocess.check_output(command, cwd=path)
+    return raw.decode(sys.stdout.encoding).strip()
+
+
 def _git_root(path):
     """
     Determines the canonical repository root of the working tree which includes
@@ -93,17 +107,6 @@ def _git_root(path):
     command = ['git', 'rev-parse', '--show-toplevel']
     raw = subprocess.check_output(command, cwd=path)
     return raw.decode(sys.stdout.encoding).rsplit('\n', maxsplit=1)[0]
-
-
-def _strip_tar_metadata(info):
-    """
-    Removes some metadata (owner, timestamp) from a TarInfo.
-    """
-    info.uid = info.gid = 0
-    info.uname = info.gname = 'root'
-    info.mtime = 0
-    info.pax_headers = {}
-    return info
 
 
 def _add_to_tar(tar, name, parent_path, root_path, exclude=[]):
@@ -121,7 +124,7 @@ def _add_to_tar(tar, name, parent_path, root_path, exclude=[]):
             _add_to_tar(tar, f, os.path.join(parent_path, name), root_path)
     else:
         tar.add(full_path, tar_path, recursive=False,
-                filter=_strip_tar_metadata)
+                filter=strip_tar_metadata)
 
 
 def _create_source_tar(path):
@@ -211,8 +214,8 @@ def _build_image(target, identifier, options):
     Runs the build for a target and (optionally) extract the wheel.
     """
     args = [
-        '--ssh', 'default',
         '--build-arg', f'DRAKE_VERSION={options.version}',
+        '--build-arg', f'DRAKE_GIT_SHA={_git_sha(resource_root)}',
     ] + _target_args(target, BUILD)
     if not options.keep_containers:
         args.append('--force-rm')
@@ -316,7 +319,13 @@ def build(options):
     time = datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
     identifier = f'{time}-{salt}'
 
-    # Generate the repository source archive.
+    # Provide the SNOPT source archive as a dependency.
+    snopt_tgz = os.path.join(
+        resource_root, 'image', 'dependencies', 'snopt.tar.gz')
+    _files_to_remove.append(snopt_tgz)
+    create_snopt_tgz(snopt_path=options.snopt_path, output=snopt_tgz)
+
+    # Generate the Drake repository source archive.
     source_tar = os.path.join(resource_root, 'image', 'drake-src.tar')
     _files_to_remove.append(source_tar)
     _create_source_tar(source_tar)

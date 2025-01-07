@@ -39,7 +39,7 @@ namespace systems {
 template <typename T>
 class VectorSystem : public LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(VectorSystem)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(VectorSystem);
 
   ~VectorSystem() override = default;
 
@@ -50,7 +50,7 @@ class VectorSystem : public LeafSystem<T> {
   ///
   /// The `direct_feedthrough` specifies whether the input port direct feeds
   /// through to the output port.  (See SystemBase::GetDirectFeedthroughs().)
-  /// When not provided, assumes true (the output is direct feedthrough).
+  /// When nullopt, assumes true (the output is direct feedthrough).
   /// When false, the DoCalcVectorOutput `input` will be empty (zero-sized).
   ///
   /// Does *not* declare scalar-type conversion support (AutoDiff, etc.).  To
@@ -58,9 +58,9 @@ class VectorSystem : public LeafSystem<T> {
   /// (For that, see @ref system_scalar_conversion at the example titled
   /// "Example using drake::systems::VectorSystem as the base class".)
   VectorSystem(int input_size, int output_size,
-               std::optional<bool> direct_feedthrough = std::nullopt)
+               std::optional<bool> direct_feedthrough)
       : VectorSystem(SystemScalarConverter{}, input_size, output_size,
-                     direct_feedthrough) {}
+                     direct_feedthrough.value_or(true)) {}
 
   /// Creates a system with one input port and one output port of the given
   /// sizes, when the sizes are non-zero.  Either size can be zero, in which
@@ -69,7 +69,7 @@ class VectorSystem : public LeafSystem<T> {
   ///
   /// The `direct_feedthrough` specifies whether the input port direct feeds
   /// through to the output port.  (See SystemBase::GetDirectFeedthroughs().)
-  /// When not provided, infers feedthrough from the symbolic form if
+  /// When nullopt, infers feedthrough from the symbolic form if
   /// available, or else assumes true (the output is direct feedthrough).
   /// When false, the DoCalcVectorOutput `input` will be empty (zero-sized).
   ///
@@ -81,8 +81,9 @@ class VectorSystem : public LeafSystem<T> {
   /// related to scalar-type conversion support, especially the example titled
   /// "Example using drake::systems::VectorSystem as the base class".
   VectorSystem(SystemScalarConverter converter, int input_size, int output_size,
-               std::optional<bool> direct_feedthrough = std::nullopt)
-      : LeafSystem<T>(std::move(converter)) {
+               std::optional<bool> direct_feedthrough)
+    : LeafSystem<T>(std::move(converter)),
+      direct_feedthrough_(direct_feedthrough) {
     if (input_size > 0) {
       this->DeclareInputPort(kUseDefaultName, kVectorValued, input_size);
     }
@@ -212,6 +213,8 @@ class VectorSystem : public LeafSystem<T> {
           (context.MaybeGetFixedInputPortValue(0) != nullptr);
       if (is_symbolic && is_fixed_input) {
         should_eval_input = true;
+      } else if (direct_feedthrough_.has_value()) {
+        should_eval_input = direct_feedthrough_.value();
       } else {
         should_eval_input = this->HasAnyDirectFeedthrough();
       }
@@ -333,10 +336,12 @@ class VectorSystem : public LeafSystem<T> {
   // DoCalcVectorDiscreteVariableUpdates().
   EventStatus CalcDiscreteUpdate(const Context<T>& context,
                                  DiscreteValues<T>* discrete_state) const;
+
+  const std::optional<bool> direct_feedthrough_;
 };
 
 }  // namespace systems
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::VectorSystem)
+    class ::drake::systems::VectorSystem);

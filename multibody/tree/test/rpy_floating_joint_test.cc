@@ -39,7 +39,7 @@ class RpyFloatingJointTest : public ::testing::Test {
   void SetUp() override {
     // Spatial inertia for adding bodies. The actual value is not important for
     // these tests and therefore we do not initialize it.
-    const SpatialInertia<double> M_B;  // Default construction is ok for this.
+    const auto M_B = SpatialInertia<double>::NaN();
 
     // Create an empty model.
     auto model = std::make_unique<internal::MultibodyTree<double>>();
@@ -129,18 +129,6 @@ TEST_F(RpyFloatingJointTest, Damping) {
       (Vector6d() << kAngularDamping, kAngularDamping, kAngularDamping,
        kTranslationalDamping, kTranslationalDamping, kTranslationalDamping)
           .finished());
-
-  // Ensure the deprecated versions are correct until removal.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  EXPECT_EQ(joint_->angular_damping(), kAngularDamping);
-  EXPECT_EQ(joint_->translational_damping(), kTranslationalDamping);
-  EXPECT_EQ(
-      joint_->damping_vector(),
-      (Vector6d() << kAngularDamping, kAngularDamping, kAngularDamping,
-       kTranslationalDamping, kTranslationalDamping, kTranslationalDamping)
-          .finished());
-#pragma GCC diagnostic pop
 }
 
 // Context-dependent value access.
@@ -164,11 +152,11 @@ TEST_F(RpyFloatingJointTest, ContextDependentAccess) {
   EXPECT_TRUE(
       CompareMatrices(joint_->get_angles(*context_), angles_B, kTolerance));
 
-  joint_->set_translation(context_.get(), translation);
+  joint_->SetTranslation(context_.get(), translation);
   EXPECT_EQ(joint_->get_translation(*context_), translation);
 
   joint_->set_angles(context_.get(), Vector3d::Zero());  // Zero out pose.
-  joint_->set_translation(context_.get(), Vector3d::Zero());
+  joint_->SetTranslation(context_.get(), Vector3d::Zero());
   joint_->SetPose(context_.get(), transform_A);
   // We expect a bit of roundoff error due to transforming between rpy
   // and rotation matrix representations.
@@ -240,7 +228,8 @@ TEST_F(RpyFloatingJointTest, AddInDampingForces) {
 
 TEST_F(RpyFloatingJointTest, Clone) {
   auto model_clone = tree().CloneToScalar<AutoDiffXd>();
-  const auto& joint_clone = model_clone->get_variant(*joint_);
+  const auto& joint_clone = dynamic_cast<const RpyFloatingJoint<AutoDiffXd>&>(
+      model_clone->get_variant(*joint_));
 
   EXPECT_EQ(joint_clone.name(), joint_->name());
   EXPECT_EQ(joint_clone.frame_on_parent().index(),

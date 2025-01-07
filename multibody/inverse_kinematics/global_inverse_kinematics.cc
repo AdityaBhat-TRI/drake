@@ -30,8 +30,7 @@ std::map<BodyIndex, JointIndex> GetBodyToJointMap(
   // First loop through each joint, stores the map from the child body to the
   // joint.
   std::map<BodyIndex, JointIndex> body_to_joint_map;
-  for (JointIndex joint_index{0}; joint_index < plant.num_joints();
-       ++joint_index) {
+  for (JointIndex joint_index : plant.GetJointIndices()) {
     body_to_joint_map.emplace(plant.get_joint(joint_index).child_body().index(),
                               joint_index);
   }
@@ -583,6 +582,7 @@ GlobalInverseKinematics::BodySphereInOneOfPolytopes(
   return z;
 }
 
+namespace {
 // Approximate a quadratic constraint (which could be formulated as a Lorentz
 // cone constraint) xᵀx ≤ c² by
 // -c ≤ xᵢ ≤ c
@@ -612,6 +612,7 @@ void ApproximateBoundedNormByLinearConstraints(
   prog->AddLinearConstraint(x(0) - x(1) + x(2), -sqrt3_c, sqrt3_c);
   prog->AddLinearConstraint(x(0) - x(1) - x(2), -sqrt3_c, sqrt3_c);
 }
+}  // namespace
 
 void GlobalInverseKinematics::AddJointLimitConstraint(
     BodyIndex body_index, double joint_lower_bound, double joint_upper_bound,
@@ -626,8 +627,7 @@ void GlobalInverseKinematics::AddJointLimitConstraint(
         "the bounds on R_WB and p_WB directly.");
   }
   const Joint<double>* joint{nullptr};
-  for (JointIndex joint_index{0}; joint_index < plant_.num_joints();
-       ++joint_index) {
+  for (JointIndex joint_index : plant_.GetJointIndices()) {
     if (plant_.get_joint(joint_index).child_body().index() == body_index) {
       joint = &(plant_.get_joint(joint_index));
       break;

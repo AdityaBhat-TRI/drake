@@ -23,6 +23,9 @@ BezierCurve<T>::BezierCurve(double start_time, double end_time,
 }
 
 template <typename T>
+BezierCurve<T>::~BezierCurve() = default;
+
+template <typename T>
 T BezierCurve<T>::BernsteinBasis(int i, const T& time,
                                  std::optional<int> order) const {
   using std::pow;
@@ -30,18 +33,6 @@ T BezierCurve<T>::BernsteinBasis(int i, const T& time,
   int coeff = BinomialCoefficient(n, i);
   T s = (time - start_time_) / (end_time_ - start_time_);
   return coeff * pow(s, i) * pow(1 - s, n - i);
-}
-
-template <typename T>
-std::unique_ptr<Trajectory<T>> BezierCurve<T>::Clone() const {
-  return std::make_unique<BezierCurve<T>>(start_time_, end_time_,
-                                          control_points_);
-}
-
-template <typename T>
-MatrixX<T> BezierCurve<T>::value(const T& time) const {
-  using std::clamp;
-  return EvaluateT(clamp(time, T{start_time_}, T{end_time_}));
 }
 
 template <typename T>
@@ -77,7 +68,7 @@ VectorX<symbolic::Expression> BezierCurve<T>::GetExpression(
 template <typename T>
 void BezierCurve<T>::ElevateOrder() {
   if (order() < 0) {
-    control_points_ = MatrixX<T>::Zero(rows(), cols());
+    control_points_ = MatrixX<T>::Zero(this->rows(), this->cols());
     return;
   }
   // https://pages.mtu.edu/~shene/COURSES/cs3621/NOTES/spline/Bezier/bezier-elev.html
@@ -138,6 +129,57 @@ SparseMatrix<double> BezierCurve<T>::AsLinearInControlPoints(
 }
 
 template <typename T>
+std::unique_ptr<Trajectory<T>> BezierCurve<T>::DoClone() const {
+  return std::make_unique<BezierCurve<T>>(start_time_, end_time_,
+                                          control_points_);
+}
+
+template <typename T>
+MatrixX<T> BezierCurve<T>::do_value(const T& time) const {
+  using std::clamp;
+  return EvaluateT(clamp(time, T{start_time_}, T{end_time_}));
+}
+
+template <typename T>
+MatrixX<T> BezierCurve<T>::DoEvalDerivative(const T& time,
+                                            int derivative_order) const {
+  DRAKE_DEMAND(derivative_order >= 0);
+  if (derivative_order == 0) {
+    return this->value(time);
+  }
+  if (derivative_order > order()) {
+    return VectorX<T>::Zero(this->rows());
+  }
+
+  MatrixX<T> points = CalcDerivativePoints(derivative_order);
+  using std::clamp;
+  const T ctime = clamp(time, T{start_time_}, T{end_time_});
+
+  MatrixX<T> v = VectorX<T>::Zero(this->rows());
+  for (int i = 0; i < points.cols(); ++i) {
+    v += BernsteinBasis(i, ctime, order() - derivative_order) * points.col(i);
+  }
+  return v;
+}
+
+template <typename T>
+std::unique_ptr<Trajectory<T>> BezierCurve<T>::DoMakeDerivative(
+    int derivative_order) const {
+  DRAKE_DEMAND(derivative_order >= 0);
+  if (derivative_order == 0) {
+    return this->Clone();
+  }
+  if (derivative_order > order()) {
+    // Then return the zero curve.
+    return std::make_unique<BezierCurve<T>>(start_time_, end_time_,
+                                            VectorX<T>::Zero(this->rows()));
+  }
+
+  return std::make_unique<BezierCurve<T>>(
+      start_time_, end_time_, CalcDerivativePoints(derivative_order));
+}
+
+template <typename T>
 MatrixX<T> BezierCurve<T>::CalcDerivativePoints(int derivative_order) const {
   DRAKE_DEMAND(derivative_order <= order());
   int n = order();
@@ -153,51 +195,12 @@ MatrixX<T> BezierCurve<T>::CalcDerivativePoints(int derivative_order) const {
 }
 
 template <typename T>
-MatrixX<T> BezierCurve<T>::DoEvalDerivative(const T& time,
-                                            int derivative_order) const {
-  DRAKE_DEMAND(derivative_order >= 0);
-  if (derivative_order == 0) {
-    return this->value(time);
-  }
-  if (derivative_order > order()) {
-    return VectorX<T>::Zero(rows());
-  }
-
-  MatrixX<T> points = CalcDerivativePoints(derivative_order);
-  using std::clamp;
-  const T ctime = clamp(time, T{start_time_}, T{end_time_});
-
-  MatrixX<T> v = VectorX<T>::Zero(rows());
-  for (int i = 0; i < points.cols(); ++i) {
-    v += BernsteinBasis(i, ctime, order() - derivative_order) * points.col(i);
-  }
-  return v;
-}
-
-template <typename T>
 VectorX<T> BezierCurve<T>::EvaluateT(const T& time) const {
-  VectorX<T> v = VectorX<T>::Zero(rows());
+  VectorX<T> v = VectorX<T>::Zero(this->rows());
   for (int i = 0; i < control_points_.cols(); ++i) {
     v += BernsteinBasis(i, time) * control_points_.col(i);
   }
   return v;
-}
-
-template <typename T>
-std::unique_ptr<Trajectory<T>> BezierCurve<T>::DoMakeDerivative(
-    int derivative_order) const {
-  DRAKE_DEMAND(derivative_order >= 0);
-  if (derivative_order == 0) {
-    return this->Clone();
-  }
-  if (derivative_order > order()) {
-    // Then return the zero curve.
-    return std::make_unique<BezierCurve<T>>(start_time_, end_time_,
-                                            VectorX<T>::Zero(rows()));
-  }
-
-  return std::make_unique<BezierCurve<T>>(
-      start_time_, end_time_, CalcDerivativePoints(derivative_order));
 }
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(

@@ -67,14 +67,28 @@ GTEST_TEST(MaxCliqueSolverViaMipTest, TestConstructorSettersAndGetters) {
   solvers::SolverOptions options{};
   options.SetOption(solvers::CommonSolverOption::kPrintToConsole, 1);
   solver.SetSolverOptions(options);
-  EXPECT_TRUE(solver.GetSolverOptions().get_print_to_console());
+  EXPECT_EQ(solver.GetSolverOptions(), options);
 
   // Test the constructor with the initial guess and solver options passed.
   MaxCliqueSolverViaMip solver2{initial_guess, options};
   EXPECT_TRUE(solver2.GetInitialGuess().has_value());
   EXPECT_TRUE(
       CompareMatrices(solver2.GetInitialGuess().value(), initial_guess));
-  EXPECT_TRUE(solver2.GetSolverOptions().get_print_to_console());
+  EXPECT_EQ(solver2.GetSolverOptions(), options);
+}
+
+GTEST_TEST(MaxCliqueSolverViaMipTest, TestClone) {
+  const Eigen::Vector2d initial_guess = Eigen::Vector2d::Ones();
+  solvers::SolverOptions options{};
+  options.SetOption(solvers::CommonSolverOption::kPrintToConsole, 1);
+  MaxCliqueSolverViaMip solver{initial_guess, options};
+  std::unique_ptr<MaxCliqueSolverBase> solver_clone = solver.Clone();
+  auto solver_clone_mip =
+      dynamic_cast<MaxCliqueSolverViaMip*>(solver_clone.get());
+  ASSERT_FALSE(solver_clone_mip == nullptr);
+  EXPECT_TRUE(CompareMatrices(solver.GetInitialGuess().value(),
+                              solver_clone_mip->GetInitialGuess().value()));
+  EXPECT_EQ(solver_clone_mip->GetSolverOptions(), options);
 }
 
 GTEST_TEST(MaxCliqueSolverViaMipTest, CompleteGraph) {
@@ -154,7 +168,7 @@ GTEST_TEST(MaxCliqueSolverViaMipTest, FullyConnectedPlusFullBipartiteGraph) {
       internal::FullyConnectedPlusFullBipartiteGraph();
   VectorX<bool> solution(9);
 
-  // The max cliuqe solutions are pairs of vertices on the bipartite graph.
+  // The max clique solutions are pairs of vertices on the bipartite graph.
   solution << true, true, true, false, false, false, false, false, false;
 
   std::vector<VectorX<bool>> possible_solutions;

@@ -23,6 +23,7 @@ namespace internal {
 // for a particular joint object.
 template <typename T>
 class JointImplementationBuilder;
+class MobilizerTester;
 }  // namespace internal
 
 /// A %Joint models the kinematical relationship which characterizes the
@@ -76,11 +77,13 @@ class JointImplementationBuilder;
 template <typename T>
 class Joint : public MultibodyElement<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Joint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Joint);
+
+  // TODO(sherm1) Shouldn't these constructors be in protected?
 
   /// Creates a joint between two Frame objects which imposes a given kinematic
   /// relation between frame F attached on the parent body P and frame M
-  /// attached on the child body B. The joint will be initialized to the model
+  /// attached on the child body B. The joint will be assigned to the model
   /// instance from @p frame_on_child (this is the typical convention for joints
   /// between the world and a model, or between two models (e.g. an arm to a
   /// gripper)).  See this class's documentation for further details.
@@ -173,33 +176,37 @@ class Joint : public MultibodyElement<T> {
               pos_upper_limits, vel_lower_limits, vel_upper_limits,
               acc_lower_limits, acc_upper_limits) {}
 
-  virtual ~Joint() {}
+  virtual ~Joint();
 
   /// Returns this element's unique index.
   JointIndex index() const { return this->template index_impl<JointIndex>(); }
+
+  /// Returns this element's unique ordinal. The joint's ordinal is a unique
+  /// index into contiguous containers that have an entry for each Joint, such
+  /// as the vector valued reaction forces (see
+  /// MultibodyPlant::get_reaction_forces_output_port()). The ordinal value will
+  /// be updated (if needed) when joints are removed from the parent plant so
+  /// that the set of ordinal values is a bijection with [0, num_joints()).
+  /// Ordinals are assigned in the order that joints are added to the plant,
+  /// thus a set of joints sorted by ordinal has the same ordering as if it were
+  /// sorted by JointIndex. If joints have been removed from the plant, do *not*
+  /// use index() to access contiguous containers with entries per Joint.
+  int ordinal() const { return this->ordinal_impl(); }
 
   /// Returns the name of this joint.
   const std::string& name() const { return name_; }
 
   /// Returns a const reference to the parent body P.
-  const RigidBody<T>& parent_body() const {
-    return frame_on_parent_.body();
-  }
+  const RigidBody<T>& parent_body() const { return frame_on_parent_.body(); }
 
   /// Returns a const reference to the child body B.
-  const RigidBody<T>& child_body() const {
-    return frame_on_child_.body();
-  }
+  const RigidBody<T>& child_body() const { return frame_on_child_.body(); }
 
   /// Returns a const reference to the frame F attached on the parent body P.
-  const Frame<T>& frame_on_parent() const {
-    return frame_on_parent_;
-  }
+  const Frame<T>& frame_on_parent() const { return frame_on_parent_; }
 
   /// Returns a const reference to the frame M attached on the child body B.
-  const Frame<T>& frame_on_child() const {
-    return frame_on_child_;
-  }
+  const Frame<T>& frame_on_child() const { return frame_on_child_; }
 
   /// Returns a string identifying the type of `this` joint, such as "revolute"
   /// or "prismatic".
@@ -208,9 +215,7 @@ class Joint : public MultibodyElement<T> {
   /// Returns the index to the first generalized velocity for this joint
   /// within the vector v of generalized velocities for the full multibody
   /// system.
-  int velocity_start() const {
-    return do_get_velocity_start();
-  }
+  int velocity_start() const { return do_get_velocity_start(); }
 
   /// Returns the number of generalized velocities describing this joint.
   int num_velocities() const {
@@ -221,9 +226,7 @@ class Joint : public MultibodyElement<T> {
   /// Returns the index to the first generalized position for this joint
   /// within the vector q of generalized positions for the full multibody
   /// system.
-  int position_start() const {
-    return do_get_position_start();
-  }
+  int position_start() const { return do_get_position_start(); }
 
   /// Returns the number of generalized positions describing this joint.
   int num_positions() const {
@@ -309,11 +312,8 @@ class Joint : public MultibodyElement<T> {
   ///   `forces` is `nullptr` or if `forces` doest not have the right sizes to
   ///   accommodate a set of forces for the model to which this joint belongs.
   // NVI to DoAddInOneForce().
-  void AddInOneForce(
-      const systems::Context<T>& context,
-      int joint_dof,
-      const T& joint_tau,
-      MultibodyForces<T>* forces) const {
+  void AddInOneForce(const systems::Context<T>& context, int joint_dof,
+                     const T& joint_tau, MultibodyForces<T>* forces) const {
     DRAKE_DEMAND(forces != nullptr);
     DRAKE_DEMAND(0 <= joint_dof && joint_dof < num_velocities());
     DRAKE_DEMAND(forces->CheckHasRightSizeForModel(this->get_parent_tree()));
@@ -331,8 +331,8 @@ class Joint : public MultibodyElement<T> {
   ///   not have the right sizes to accommodate a set of forces for the model
   ///   to which this joint belongs.
   // NVI to DoAddInOneForce().
-  void AddInDamping(
-      const systems::Context<T>& context, MultibodyForces<T>* forces) const {
+  void AddInDamping(const systems::Context<T>& context,
+                    MultibodyForces<T>* forces) const {
     DRAKE_DEMAND(forces != nullptr);
     DRAKE_DEMAND(forces->CheckHasRightSizeForModel(this->get_parent_tree()));
     DoAddInDamping(context, forces);
@@ -357,12 +357,13 @@ class Joint : public MultibodyElement<T> {
     return implementation_->mobilizer->is_locked(context);
   }
 
-  /// @name Methods to get and set the limits of `this` joint. For position
-  /// limits, the layout is the same as the generalized position's. For
-  /// velocity and acceleration limits, the layout is the same as the
-  /// generalized velocity's. A limit with value +/- ∞ implies no upper or
+  /// @name            Methods to get and set limits
+  /// For position limits, the layout is the same as the generalized positions
+  /// q. For velocity and acceleration limits, the layout is the same as the
+  /// generalized velocities v. A limit with value +/- ∞ implies no upper or
   /// lower limit.
   /// @{
+
   /// Returns the position lower limits.
   const VectorX<double>& position_lower_limits() const {
     return pos_lower_limits_;
@@ -391,11 +392,6 @@ class Joint : public MultibodyElement<T> {
   /// Returns the acceleration upper limits.
   const VectorX<double>& acceleration_upper_limits() const {
     return acc_upper_limits_;
-  }
-
-  /// Returns the default positions.
-  const VectorX<double>& default_positions() const {
-    return default_positions_;
   }
 
   /// Sets the position limits to @p lower_limits and @p upper_limits.
@@ -443,49 +439,186 @@ class Joint : public MultibodyElement<T> {
     acc_upper_limits_ = upper_limits;
   }
 
-  /// Sets the default positions to @p default_positions. Joint subclasses are
-  /// expected to implement the do_set_default_positions().
-  /// @throws std::exception if the dimension of @p default_positions does not
-  /// match num_positions().
-  /// @note The values in @p default_positions are NOT constrained to be within
-  /// `position_lower_limits()` and `position_upper_limits()`.
-  void set_default_positions(const VectorX<double>& default_positions) {
-    DRAKE_THROW_UNLESS(default_positions.size() == num_positions());
-    default_positions_ = default_positions;
-    do_set_default_positions(default_positions);
+  /// @}
+
+  // TODO(sherm1) Consider implementing SetPose/SetDefaultPose() for every joint
+  //  type, with the joint responsible for making a "best effort" to match the
+  //  pose if it can't do so exactly. Simbody has that feature and it has proven
+  //  very useful in practice.
+
+  /// @name       Methods to set and get pose and velocity
+  ///
+  /// Joints have both a default state q₀, v₀ (stored here) and a runtime state
+  /// q, v (stored in a systems::Context). The default state is the value that
+  /// is used to initialize the runtime state when a Context is first created.
+  /// (The default velocity v₀ for a joint is always zero so is not settable
+  /// here.) There are several ways to set these values:
+  ///  - If you understand a joint's state representation q and v, you can
+  ///    directly set them using methods below. The specific choice of
+  ///    generalized coordinates q and generalized velocities v is defined by
+  ///    the particular joint type; see documentation for the joint type.
+  ///  - Alternatively you can provide a generic pose X_FM and spatial velocity
+  ///    V_FM in which case the joint will set q and v to match or approximate
+  ///    those quantities. In particular, Drake's "floating" (6 degree of
+  ///    freedom) joints can represent any pose and spatial velocity.
+  ///  - Particular joint types may provide additional joint-specific functions
+  ///    for setting pose and velocity; see their documentation.
+  /// @{
+
+  /// Sets the default generalized position coordinates q₀ to
+  /// `default_positions`.
+  /// @note The values in `default_positions` are NOT constrained to be within
+  ///   position_lower_limits() and position_upper_limits().
+  /// @note The default generalized velocities v₀ are zero for every joint.
+  /// @throws std::exception if the dimension of `default_positions` does not
+  ///   match num_positions().
+  void set_default_positions(const VectorX<double>& default_positions);
+
+  /// Returns the default generalized position coordinates q₀. These will be
+  /// the values set with set_default_positions() if any; otherwise, they will
+  /// be the "zero configuration" for this joint type (as defined by the
+  /// particular joint type).
+  /// @note The default generalized velocities v₀ are zero for every joint.
+  const VectorX<double>& default_positions() const {
+    return default_positions_;
   }
 
-  // TODO(sherm1) Consider implementing SetDefaultPose() for every joint type,
-  //  with the joint responsible for making a "best effort" to match the pose if
-  //  it can't do so exactly. Simbody has that feature and it has proven very
-  //  useful in practice.
+  /// Sets in the given `context` the generalized position coordinates q for
+  /// this joint to `positions`.
+  /// @note The values in `positions` are NOT constrained to be within
+  ///   position_lower_limits() and position_upper_limits().
+  /// @throws std::exception if the dimension of `positions` does not match
+  ///   num_positions().
+  /// @throws std::exception if the containing MultibodyPlant has not yet been
+  ///   finalized.
+  /// @pre `context` is not null.
+  void SetPositions(systems::Context<T>* context,
+                    const Eigen::Ref<const VectorX<T>>& positions) const;
 
-  /// Sets this %Joint's default generalized positions q₀ such that the pose
+  /// Returns the current value in the given `context` of the generalized
+  /// coordinates q for this joint.
+  /// @throws std::exception if the containing MultibodyPlant has not yet been
+  ///   finalized.
+  Eigen::Ref<const VectorX<T>> GetPositions(
+      const systems::Context<T>& context) const;
+
+  /// Sets in the given `context` the generalized velocity coordinates v for
+  /// this joint to `velocities`.
+  /// @note The values in `velocities` are NOT constrained to be within
+  ///   velocity_lower_limits() and velocity_upper_limits().
+  /// @throws std::exception if the dimension of `velocities` does not match
+  ///   num_velocities().
+  /// @throws std::exception if the containing MultibodyPlant has not yet been
+  ///   finalized.
+  /// @pre `context` is not null.
+  void SetVelocities(systems::Context<T>* context,
+                     const Eigen::Ref<const VectorX<T>>& velocities) const;
+
+  /// Returns the current value in the given `context` of the generalized
+  /// velocities v for this joint.
+  /// @throws std::exception if the containing MultibodyPlant has not yet been
+  /// finalized.
+  Eigen::Ref<const VectorX<T>> GetVelocities(
+      const systems::Context<T>& context) const;
+
+  /// Sets this joint's default generalized positions q₀ such that the pose
   /// of the child frame M in the parent frame F best matches the given pose.
-  /// The pose is given by a RigidTransform `X_FM`, but a %Joint will
+  /// The pose is given by a RigidTransform `X_FM`, but a joint will
   /// represent pose differently.
   /// @note Currently this is implemented only for floating (6 dof) joints
   /// which can represent any pose.
-  /// @throws std::exception if called for any %Joint type that does not
+  /// @throws std::exception if called for any joint type that does not
   /// implement this function.
-  /// @see get_default_positions() to see the resulting q₀ after this call.
+  /// @see default_positions() to see the resulting q₀ after this call.
   /// @see SetDefaultPosePair() for an alternative using a quaternion
   void SetDefaultPose(const math::RigidTransform<double>& X_FM) {
     SetDefaultPosePair(X_FM.rotation().ToQuaternion(), X_FM.translation());
   }
 
-  /// Returns this %Joint's default pose as a RigidTransform X_FM.
+  /// Returns this joint's default pose as a RigidTransform X_FM.
   /// @note Currently this is implemented only for floating (6 dof) joints
-  /// which can represent any pose.
-  /// @throws std::exception if called for any %Joint type that does not
-  /// implement this function.
+  ///   which can represent any pose.
+  /// @throws std::exception if called for any joint type that does not
+  ///   implement this function.
   /// @retval X_FM The default pose as a rigid transform.
-  /// @see get_default_positions() to see the generalized positions q₀ that this
-  ///      joint used to generate the returned transform.
+  /// @see default_positions() to see the generalized positions q₀ that this
+  ///   joint used to generate the returned transform.
+  /// @see GetDefaultPosePair() for an alternative using a quaternion
   math::RigidTransform<double> GetDefaultPose() const {
     auto pose_pair = GetDefaultPosePair();
     return math::RigidTransform(pose_pair.first, pose_pair.second);
   }
+
+  /// Sets in the given `context` this joint's generalized positions q such
+  /// that the pose of the child frame M in the parent frame F best matches the
+  /// given pose. The pose is given by a RigidTransform X_FM, but a joint
+  /// will represent pose differently. Drake's "floating" (6 dof) joints can
+  /// represent any pose, but other joints may only be able to approximate
+  /// X_FM. See the individual joint descriptions for specifics.
+  ///
+  /// @note Currently this is implemented only for floating (6 dof) joints
+  ///   which can represent any pose.
+  /// @throws std::exception if called for any joint type that does not
+  ///   implement this function.
+  /// @throws std::exception if the containing MultibodyPlant has not yet been
+  ///   finalized.
+  /// @pre `context` is not null.
+  /// @see GetPositions() to see the resulting q after this call.
+  /// @see SetPosePair() for an alternative using a quaternion.
+  void SetPose(systems::Context<T>* context,
+               const math::RigidTransform<T>& X_FM) const {
+    SetPosePairImpl(context, X_FM.rotation().ToQuaternion(), X_FM.translation(),
+                    __func__);
+  }
+
+  /// Returns this joint's current pose using its position coordinates q taken
+  /// from the given `context` and converting that to a RigidTransform X_FM(q).
+  ///
+  /// @note The returned pose may not match the transform that was supplied to
+  ///   SetPose() since in general joints (other than 6 dof joints) cannot
+  ///   represent arbitrary poses.
+  /// @note All joint types support this function.
+  /// @throws std::exception if called for any joint type that does not
+  ///   implement this function.
+  /// @retval X_FM The current pose as a rigid transform.
+  /// @see GetPositions() to see the generalized positions q that this
+  ///   joint used to generate the returned transform.
+  math::RigidTransform<T> GetPose(const systems::Context<T>& context) const {
+    const auto& [q_FM, p_FM] = GetPosePair(context);
+    return math::RigidTransform(q_FM, p_FM);
+  }
+
+  /// Sets in the given `context` this joint's generalized velocities v such
+  /// that the spatial velocity of the child frame M in the parent frame F best
+  /// matches the given spatial velocity. The velocity is provided as a spatial
+  /// velocity V_FM, but a joint may represent velocity differently. Drake's
+  /// "floating" (6 dof) joints can represent any spatial velocity, but other
+  /// joints may only be able to approximate V_FM. See the individual joint
+  /// descriptions for specifics.
+  /// @note Currently this is implemented only for floating (6 dof) joints
+  ///   which can represent any spatial velocity.
+  /// @throws std::exception if called for any joint type that does not
+  ///   implement this function.
+  /// @throws std::exception if the containing MultibodyPlant has not yet been
+  ///   finalized.
+  /// @pre `context` is not null.
+  /// @see GetVelocities() to see the resulting v after this call.
+  void SetSpatialVelocity(systems::Context<T>* context,
+                          const SpatialVelocity<T>& V_FM) const {
+    SetSpatialVelocityImpl(&*context, V_FM, __func__);
+  }
+
+  /// Given the generalized positions q and generalized velocities v for this
+  /// joint in the given `context`, returns the cross-joint spatial velocity
+  /// V_FM.
+  /// @note All joint types support this function.
+  /// @retval V_FM the spatial velocity across this joint.
+  /// @throws std::exception if the containing MultibodyPlant has not yet been
+  ///   finalized.
+  /// @see GetVelocities() to see the generalized velocities v that this
+  ///   joint used to generate the returned spatial velocity.
+  SpatialVelocity<T> GetSpatialVelocity(
+      const systems::Context<T>& context) const;
 
   // BTW These are implemented with a (quaternion,vector) pair rather than a
   // rigid transform so that we can guarantee to preserve bit-perfect results
@@ -493,21 +626,67 @@ class Joint : public MultibodyElement<T> {
   // inboard quaternion floating joint. Users should prefer the above versions.
 
   /// (Advanced) This is the same as SetDefaultPose() except it takes the
-  /// pose as a (quaternion, translation vector) pair.
-  /// @see SetDefaultPose() for more information
+  /// pose as a (quaternion, translation vector) pair. A QuaternionFloatingJoint
+  /// will store this pose bit-identically; an RpyFloatingJoint will store it
+  /// to within floating point precision; any other joint will approximate it
+  /// consistent with that joint's mobility.
+  /// @note Currently this is implemented only for floating (6 dof) joints
+  ///   which can represent any pose.
+  /// @throws std::exception if called for any joint type that does not
+  ///   implement this function.
+  /// @see SetDefaultPose()
   void SetDefaultPosePair(const Quaternion<double>& q_FM,
                           const Vector3<double>& p_FM) {
     DoSetDefaultPosePair(q_FM, p_FM);
   }
 
   /// (Advanced) This is the same as GetDefaultPose() except it returns this
-  /// %Joint's default pose as a (quaternion, translation vector) pair.
+  /// joint's default pose as a (quaternion, translation vector) pair.
+  /// @note Currently this is implemented only for floating (6 dof) joints
+  ///   which can represent any pose.
+  /// @note For a QuaternionFloatingJoint the return will be bit-identical to
+  ///   the pose provided to SetDefaultPosePair(). For any other floating
+  ///   (6 dof) joint the pose will be numerically equivalent (i.e. within
+  ///   roundoff) but not identical. For other joint types it will be some
+  ///   approximation.
   /// @retval q_FM,p_FM The default pose as a (quaternion, translation) pair.
-  /// @see GetDefaultPose() for more information
+  /// @throws std::exception if called for any joint type that does not
+  ///   implement this function.
+  /// @see GetDefaultPose()
   std::pair<Eigen::Quaternion<double>, Vector3<double>> GetDefaultPosePair()
       const {
     return DoGetDefaultPosePair();
   }
+
+  /// (Advanced) This is the same as SetPose() except it takes the
+  /// pose as a (quaternion, translation vector) pair. A QuaternionFloatingJoint
+  /// will store this pose bit-identically; any other joint will approximate it.
+  /// @note Currently this is implemented only for floating (6 dof) joints
+  ///   which can represent any pose.
+  /// @throws std::exception if called for any joint type that does not
+  ///   implement this function.
+  /// @throws std::exception if the containing MultibodyPlant has not yet been
+  ///   finalized.
+  /// @pre `context` is not null.
+  /// @see SetPose()
+  void SetPosePair(systems::Context<T>* context, const Quaternion<T>& q_FM,
+                   const Vector3<T>& p_FM) const {
+    SetPosePairImpl(&*context, q_FM, p_FM, __func__);
+  }
+
+  /// (Advanced) This is the same as GetPose() except it returns this joint's
+  /// pose in the given `context` as a (quaternion, translation vector) pair.
+  /// @note All joint types support this function.
+  /// @note For a QuaternionFloatingJoint the return will be bit-identical to
+  ///   the pose provided to SetPosePair(). For any other floating (6 dof)
+  ///   joint the pose will be numerically equivalent (i.e. within roundoff) but
+  ///   not identical. For other joint types it will be some approximation.
+  /// @retval q_FM,p_FM The pose as a (quaternion, translation) pair.
+  /// @throws std::exception if the containing MultibodyPlant has not yet been
+  ///   finalized.
+  /// @see GetPose()
+  std::pair<Eigen::Quaternion<T>, Vector3<T>> GetPosePair(
+      const systems::Context<T>& context) const;
 
   /// @}
 
@@ -522,9 +701,6 @@ class Joint : public MultibodyElement<T> {
   /// having units of N⋅m, the coefficient of viscous damping has units of
   /// N⋅m⋅s. Refer to each joint's documentation for further details.
   const VectorX<double>& default_damping_vector() const { return damping_; }
-
-  DRAKE_DEPRECATED("2024-06-01", "Use default_damping_vector() instead.")
-  const VectorX<double>& damping_vector() const { return damping_; }
 
   /// Returns the Context dependent damping coefficients stored as parameters in
   /// `context`. Refer to default_damping_vector() for details.
@@ -580,7 +756,8 @@ class Joint : public MultibodyElement<T> {
 
     std::unique_ptr<typename Joint<ToScalar>::JointImplementation>
         implementation_clone =
-        this->get_implementation().template CloneToScalar<ToScalar>(tree_clone);
+            this->get_implementation().template CloneToScalar<ToScalar>(
+                tree_clone);
     joint_clone->OwnImplementation(std::move(implementation_clone));
 
     return joint_clone;
@@ -597,8 +774,8 @@ class Joint : public MultibodyElement<T> {
  protected:
   /// (Advanced) Structure containing all the information needed to build the
   /// MultibodyTree implementation for a %Joint. At MultibodyTree::Finalize() a
-  /// %Joint creates a BluePrint of its implementation with MakeModelBlueprint()
-  /// so that MultibodyTree can build an implementation for it.
+  /// %Joint creates a BluePrint of its implementation so that MultibodyTree can
+  /// build an implementation for it.
   struct BluePrint {
     std::unique_ptr<internal::Mobilizer<T>> mobilizer;
     // TODO(sherm1): add constraints and force elements as needed.
@@ -624,9 +801,7 @@ class Joint : public MultibodyElement<T> {
     }
 
     /// Returns `true` if the implementation of this Joint uses a Mobilizer.
-    bool has_mobilizer() const {
-      return mobilizer != nullptr;
-    }
+    bool has_mobilizer() const { return mobilizer != nullptr; }
 
     // Hide the following section from Doxygen.
 #ifndef DRAKE_DOXYGEN_CXX
@@ -757,11 +932,9 @@ class Joint : public MultibodyElement<T> {
   /// This method is only called by the public NVI AddInOneForce() and therefore
   /// input arguments were checked to be valid.
   /// @see The public NVI AddInOneForce() for details.
-  virtual void DoAddInOneForce(
-      const systems::Context<T>& context,
-      int joint_dof,
-      const T& joint_tau,
-      MultibodyForces<T>* forces) const = 0;
+  virtual void DoAddInOneForce(const systems::Context<T>& context,
+                               int joint_dof, const T& joint_tau,
+                               MultibodyForces<T>* forces) const = 0;
 
   /// Adds into MultibodyForces the forces due to damping within `this` joint.
   /// How forces are added to a MultibodyTree model depends on the underlying
@@ -769,8 +942,8 @@ class Joint : public MultibodyElement<T> {
   /// constraint) and therefore specific %Joint subclasses must provide a
   /// definition for this method.
   /// The default implementation is a no-op for joints with no damping.
-  virtual void DoAddInDamping(
-      const systems::Context<T>&, MultibodyForces<T>*) const {}
+  virtual void DoAddInDamping(const systems::Context<T>&,
+                              MultibodyForces<T>*) const {}
 
   // Implements MultibodyElement::DoSetTopology(). Joints have no topology
   // though we could require them to have one in the future.
@@ -793,7 +966,8 @@ class Joint : public MultibodyElement<T> {
   /// This method must be implemented by derived classes in order to provide
   /// JointImplementationBuilder a BluePrint of their internal implementation
   /// JointImplementation.
-  virtual std::unique_ptr<BluePrint> MakeImplementationBlueprint() const = 0;
+  virtual std::unique_ptr<BluePrint> MakeImplementationBlueprint(
+      const internal::SpanningForest::Mobod& mobod) const = 0;
 
   /// Returns a const reference to the internal implementation of `this` joint.
   /// @warning The MultibodyTree model must have already been finalized, or
@@ -808,6 +982,42 @@ class Joint : public MultibodyElement<T> {
   /// Returns whether `this` joint owns a particular implementation.
   /// If the MultibodyTree has been finalized, this will return true.
   bool has_implementation() const { return implementation_ != nullptr; }
+
+ protected:
+  /// Utility for concrete joint implementations to use to select the
+  /// inboard/outboard frames for a tree in the spanning forest, given
+  /// whether they should be reversed from the parent/child frames that are
+  /// members of this Joint object.
+  std::pair<const Frame<T>*, const Frame<T>*> tree_frames(
+      bool use_reversed_mobilizer) const {
+    return use_reversed_mobilizer
+               ? std::make_pair(&frame_on_child(), &frame_on_parent())
+               : std::make_pair(&frame_on_parent(), &frame_on_child());
+  }
+
+  /// (Internal use only) Returns the mobilizer implementing this joint,
+  /// downcast to its specific type.
+  ///
+  /// @pre get_implementation().has_mobilizer() is true
+  /// @pre ConcreteMobilizer must exactly match the dynamic type of the
+  /// mobilizer associated with this Joint. This requirement is (only) checked
+  /// in Debug builds.
+  template <template <typename> class ConcreteMobilizer>
+  const ConcreteMobilizer<T>& get_mobilizer_downcast() const {
+    const internal::Mobilizer<T>* result = this->get_implementation().mobilizer;
+    DRAKE_DEMAND(result != nullptr);
+    DRAKE_ASSERT(typeid(*result) == typeid(ConcreteMobilizer<T>));
+    return static_cast<const ConcreteMobilizer<T>&>(*result);
+  }
+
+  /// (Internal use only) Mutable flavor of get_mobilizer_downcast().
+  template <template <typename> class ConcreteMobilizer>
+  ConcreteMobilizer<T>& get_mutable_mobilizer_downcast() {
+    internal::Mobilizer<T>* result = this->get_implementation().mobilizer;
+    DRAKE_DEMAND(result != nullptr);
+    DRAKE_ASSERT(typeid(*result) == typeid(ConcreteMobilizer<T>));
+    return static_cast<ConcreteMobilizer<T>&>(*result);
+  }
 
  private:
   // Make all other Joint<U> objects a friend of Joint<T> so they can make
@@ -841,6 +1051,13 @@ class Joint : public MultibodyElement<T> {
         parameters->get_mutable_numeric_parameter(damping_parameter_index_);
     damping_parameter.set_value(VectorX<T>(damping_));
   }
+
+  void SetPosePairImpl(systems::Context<T>* context, const Quaternion<T>& q_FM,
+                       const Vector3<T>& p_FM, const char* func) const;
+
+  void SetSpatialVelocityImpl(systems::Context<T>* context,
+                              const SpatialVelocity<T>& V_FM,
+                              const char* func) const;
 
   std::string name_;
   const Frame<T>& frame_on_parent_;

@@ -35,7 +35,7 @@ namespace internal {
 // where Rx(θ), Ry(θ) and Rz(θ) correspond to the elemental rotations in amount
 // of θ about the Fx, Fy and Fz axes respectively. Zero θ₀, θ₁, θ₂ angles define
 // the "zero configuration" which corresponds to frames F and M being
-// coincident, see set_zero_state(). Angles θ₀, θ₁, θ₂ are defined to be
+// coincident, see SetZeroState(). Angles θ₀, θ₁, θ₂ are defined to be
 // positive according to the right-hand-rule with the thumb aligned in the
 // direction of their respective axes.
 //
@@ -57,28 +57,46 @@ namespace internal {
 // @note The roll-pitch-yaw (space x-y-z) Euler sequence is also known as the
 // Tait-Bryan angles or Cardan angles.
 //
+//    H_FM₆ₓ₃=[ I₃ₓ₃ ]    Hdot_FM = 0₆ₓ₃
+//            [ 0₃ₓ₃ ]
+//
 // @tparam_default_scalar
 template <typename T>
 class RpyBallMobilizer final : public MobilizerImpl<T, 3, 3> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RpyBallMobilizer)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RpyBallMobilizer);
+  using MobilizerBase = MobilizerImpl<T, 3, 3>;
+  using MobilizerBase::kNq, MobilizerBase::kNv, MobilizerBase::kNx;
+  template <typename U>
+  using QVector = typename MobilizerBase::template QVector<U>;
+  template <typename U>
+  using VVector = typename MobilizerBase::template VVector<U>;
+  template <typename U>
+  using HMatrix = typename MobilizerBase::template HMatrix<U>;
 
   // Constructor for an RpyBallMobilizer between an inboard frame F
   // inboard_frame_F and an outboard frame M outboard_frame_M granting
   // three rotational degree of freedom corresponding to angles θ₀, θ₁, θ₂ as
   // described in this class's documentation.
-  RpyBallMobilizer(const Frame<T>& inboard_frame_F,
-                   const Frame<T>& outboard_frame_M) :
-      MobilizerBase(inboard_frame_F, outboard_frame_M) {}
+  RpyBallMobilizer(const SpanningForest::Mobod& mobod,
+                   const Frame<T>& inboard_frame_F,
+                   const Frame<T>& outboard_frame_M)
+      : MobilizerBase(mobod, inboard_frame_F, outboard_frame_M) {}
 
-  bool has_quaternion_dofs() const override { return false; }
+  ~RpyBallMobilizer() final;
+
+  std::unique_ptr<internal::BodyNode<T>> CreateBodyNode(
+      const internal::BodyNode<T>* parent_node, const RigidBody<T>* body,
+      const Mobilizer<T>* mobilizer) const final;
+
+  bool has_quaternion_dofs() const final { return false; }
 
   // Overloads to define the suffix names for the position and velocity
   // elements.
   std::string position_suffix(int position_index_in_mobilizer) const final;
   std::string velocity_suffix(int velocity_index_in_mobilizer) const final;
 
-  bool can_rotate() const final    { return true; }
+  bool can_rotate() const final { return true; }
   bool can_translate() const final { return false; }
 
   // Retrieves from context the three roll-pitch-yaw angles θ₀, θ₁, θ₂ which
@@ -105,9 +123,8 @@ class RpyBallMobilizer final : public MobilizerImpl<T, 3, 3> {
   //   θ₂, described in this class's documentation, at entries angles(0),
   //   angles(1) and angles(2), respectively.
   // @returns a constant reference to this mobilizer.
-  const RpyBallMobilizer<T>& set_angles(
-      systems::Context<T>* context,
-      const Vector3<T>& angles) const;
+  const RpyBallMobilizer<T>& SetAngles(systems::Context<T>* context,
+                                       const Vector3<T>& angles) const;
 
   // Sets context so this mobilizer's generalized coordinates (roll-pitch-yaw
   // angles θ₀, θ₁, θ₂) are consistent with the given R_FM rotation matrix.
@@ -141,8 +158,8 @@ class RpyBallMobilizer final : public MobilizerImpl<T, 3, 3> {
   //   A vector in ℝ³ with the desired angular velocity of the outboard frame M
   //   in the inboard frame F, expressed in F.
   // @returns a constant reference to this mobilizer.
-  const RpyBallMobilizer<T>& set_angular_velocity(
-      systems::Context<T>* context, const Vector3<T>& w_FM) const;
+  const RpyBallMobilizer<T>& SetAngularVelocity(systems::Context<T>* context,
+                                                const Vector3<T>& w_FM) const;
 
   // Stores in state the angular velocity w_FM of the outboard frame
   // M in the inboard frame F corresponding to this mobilizer.
@@ -156,24 +173,49 @@ class RpyBallMobilizer final : public MobilizerImpl<T, 3, 3> {
   //   A vector in ℝ³ with the desired angular velocity of the outboard frame M
   //   in the inboard frame F, expressed in F.
   // @returns a constant reference to this mobilizer.
-  const RpyBallMobilizer<T>& set_angular_velocity(
+  const RpyBallMobilizer<T>& SetAngularVelocity(
       const systems::Context<T>& context, const Vector3<T>& w_FM,
       systems::State<T>* state) const;
 
   // Computes the across-mobilizer transform X_FM(q) between the inboard
   // frame F and the outboard frame M as a function of the roll-pitch-yaw angles
   // θ₀, θ₁, θ₂ stored in context.
-  math::RigidTransform<T> CalcAcrossMobilizerTransform(
-      const systems::Context<T>& context) const override;
+  math::RigidTransform<T> calc_X_FM(const T* q) const {
+    return math::RigidTransform<T>(math::RollPitchYaw<T>(q[0], q[1], q[2]),
+                                   Vector3<T>::Zero());
+  }
 
   // Computes the across-mobilizer velocity V_FM(q, v) of the outboard frame
-  // M measured and expressed in frame F as a function of the roll-pitch-yaw
-  // angles θ₀, θ₁, θ₂ stored in context and of the input generalized
+  // M measured and expressed in frame F as a function of the input generalized
   // velocity v which contains the components of the angular velocity w_FM
-  // expressed in frame F.
+  // expressed in frame F. The translational velocity is always zero.
+  SpatialVelocity<T> calc_V_FM(const T*, const T* v) const {
+    const Eigen::Map<const Vector3<T>> w_FM(v);
+    return SpatialVelocity<T>(w_FM, Vector3<T>::Zero());
+  }
+
+  // Here H₆ₓ₃=[I₃ₓ₃ 0₃ₓ₃]ᵀ so Hdot=0 and
+  // A_FM = H⋅vdot + Hdot⋅v = [vdot, 0₃]ᵀ
+  SpatialAcceleration<T> calc_A_FM(const T*, const T*, const T* vdot) const {
+    const Eigen::Map<const Vector3<T>> alpha_FM(vdot);
+    return SpatialAcceleration<T>(alpha_FM, Vector3<T>::Zero());
+  }
+
+  // Returns tau = H_FMᵀ⋅F. The rotational part of H is identity here and
+  // the rest is zero.
+  void calc_tau(const T*, const SpatialForce<T>& F_BMo_F, T* tau) const {
+    DRAKE_ASSERT(tau != nullptr);
+    Eigen::Map<VVector<T>> tau_as_vector(tau);
+    const Vector3<T>& t_BMo_F = F_BMo_F.rotational();
+    tau_as_vector = t_BMo_F;
+  }
+
+  math::RigidTransform<T> CalcAcrossMobilizerTransform(
+      const systems::Context<T>& context) const final;
+
   SpatialVelocity<T> CalcAcrossMobilizerSpatialVelocity(
       const systems::Context<T>& context,
-      const Eigen::Ref<const VectorX<T>>& v) const override;
+      const Eigen::Ref<const VectorX<T>>& v) const final;
 
   // Computes the across-mobilizer acceleration A_FM(q, v, v̇) of the
   // outboard frame M in the inboard frame F.
@@ -188,10 +230,9 @@ class RpyBallMobilizer final : public MobilizerImpl<T, 3, 3> {
       const systems::Context<T>& context,
       const Eigen::Ref<const VectorX<T>>& vdot) const override;
 
-  void ProjectSpatialForce(
-      const systems::Context<T>& context,
-      const SpatialForce<T>& F_Mo_F,
-      Eigen::Ref<VectorX<T>> tau) const override;
+  void ProjectSpatialForce(const systems::Context<T>& context,
+                           const SpatialForce<T>& F_Mo_F,
+                           Eigen::Ref<VectorX<T>> tau) const override;
 
   bool is_velocity_equal_to_qdot() const override { return false; }
 
@@ -213,10 +254,9 @@ class RpyBallMobilizer final : public MobilizerImpl<T, 3, 3> {
   // in large errors for qdot), this method aborts when the absolute value of
   // the cosine of θ₁ is smaller than 10⁻³, a number arbitrarily chosen to this
   // end.
-  void MapVelocityToQDot(
-      const systems::Context<T>& context,
-      const Eigen::Ref<const VectorX<T>>& v,
-      EigenPtr<VectorX<T>> qdot) const override;
+  void MapVelocityToQDot(const systems::Context<T>& context,
+                         const Eigen::Ref<const VectorX<T>>& v,
+                         EigenPtr<VectorX<T>> qdot) const override;
 
   // Maps time derivatives of the roll-pitch-yaw angles θ₀, θ₁, θ₂ in qdot to
   // the generalized velocity v, which corresponds to the angular velocity
@@ -230,19 +270,16 @@ class RpyBallMobilizer final : public MobilizerImpl<T, 3, 3> {
   // @param[out] v
   //   A vector of generalized velocities for this Mobilizer which should
   //   correspond to a vector in ℝ³ for an angular velocity w_FM of M in F.
-  void MapQDotToVelocity(
-      const systems::Context<T>& context,
-      const Eigen::Ref<const VectorX<T>>& qdot,
-      EigenPtr<VectorX<T>> v) const override;
-
+  void MapQDotToVelocity(const systems::Context<T>& context,
+                         const Eigen::Ref<const VectorX<T>>& qdot,
+                         EigenPtr<VectorX<T>> v) const override;
 
  protected:
   void DoCalcNMatrix(const systems::Context<T>& context,
                      EigenPtr<MatrixX<T>> N) const final;
 
-  void DoCalcNplusMatrix(
-      const systems::Context<T>& context,
-      EigenPtr<MatrixX<T>> Nplus) const final;
+  void DoCalcNplusMatrix(const systems::Context<T>& context,
+                         EigenPtr<MatrixX<T>> Nplus) const final;
 
   std::unique_ptr<Mobilizer<double>> DoCloneToScalar(
       const MultibodyTree<double>& tree_clone) const override;
@@ -254,16 +291,6 @@ class RpyBallMobilizer final : public MobilizerImpl<T, 3, 3> {
       const MultibodyTree<symbolic::Expression>& tree_clone) const override;
 
  private:
-  typedef MobilizerImpl<T, 3, 3> MobilizerBase;
-  // Bring the handy number of position and velocities MobilizerImpl enums into
-  // this class' scope. This is useful when writing mathematical expressions
-  // with fixed-sized vectors since we can do things like Vector<T, nq>.
-  // Operations with fixed-sized quantities can be optimized at compile time
-  // and therefore they are highly preferred compared to the very slow dynamic
-  // sized quantities.
-  using MobilizerBase::kNq;
-  using MobilizerBase::kNv;
-
   // Helper method to make a clone templated on ToScalar.
   template <typename ToScalar>
   std::unique_ptr<Mobilizer<ToScalar>> TemplatedDoCloneToScalar(
@@ -275,4 +302,4 @@ class RpyBallMobilizer final : public MobilizerImpl<T, 3, 3> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::internal::RpyBallMobilizer)
+    class ::drake::multibody::internal::RpyBallMobilizer);

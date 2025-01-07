@@ -35,6 +35,8 @@ struct IrisOptions {
     a->Visit(DRAKE_NVP(num_additional_constraint_infeasible_samples));
     a->Visit(DRAKE_NVP(random_seed));
     a->Visit(DRAKE_NVP(mixing_steps));
+    a->Visit(DRAKE_NVP(convexity_radius_stepback));
+    a->Visit(DRAKE_NVP(verify_domain_boundedness));
   }
 
   /** The initial polytope is guaranteed to contain the point if that point is
@@ -92,6 +94,14 @@ struct IrisOptions {
   specified, IRIS regions will be confined to the intersection between the
   domain and `bounding_region` */
   std::optional<HPolyhedron> bounding_region{};
+
+  /** If the user knows the intersection of bounding_region and the domain (for
+  IRIS) or plant joint limits (for IrisInConfigurationSpace) is bounded,
+  setting this flag to `false` will skip the boundedness check that IRIS and
+  IrisInConfigurationSpace perform (leading to a small speedup, as checking
+  boundedness requires solving optimization problems). If the intersection turns
+  out to be unbounded, this will lead to undefined behavior. */
+  bool verify_domain_boundedness{true};
 
   /** By default, IRIS in configuration space certifies regions for collision
   avoidance constraints and joint limits. This option can be used to pass
@@ -154,10 +164,24 @@ struct IrisOptions {
   */
   std::function<bool(const HPolyhedron&)> termination_func{};
 
-  /* The `mixing_steps` parameters is passed to HPolyhedron::UniformSample to
+  /** The `mixing_steps` parameters is passed to HPolyhedron::UniformSample to
   control the total number of hit-and-run steps taken for each new random
   sample. */
   int mixing_steps{10};
+
+  /** The SolverOptions used in the optimization program. */
+  std::optional<solvers::SolverOptions> solver_options;
+
+  /** Artificial joint limits are added to continuous revolute joints and planar
+  joints with an unbounded revolute degree-of-freedom on a per-region basis. If
+  the seed point value for that joint is θ, then the limits are
+  θ - π/2 + convexity_radius_stepback and θ + π/2 - convexity_radius_stepback.
+  Setting this to a negative number allows growing larger regions, but those
+  regions must then be partitioned to be used with GcsTrajectoryOptimization.
+  See @ref geometry_optimization_geodesic_convexity for more details.
+  IrisInConfigurationSpace throws if this value is not smaller
+  than π/2. */
+  double convexity_radius_stepback{1e-3};
 };
 
 /** The IRIS (Iterative Region Inflation by Semidefinite programming) algorithm,

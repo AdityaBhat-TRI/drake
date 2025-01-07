@@ -92,11 +92,8 @@ GTEST_TEST(HPolyhedronTest, UnitBoxTest) {
   EXPECT_FALSE(CheckAddPointInSetConstraints(H, Vector3d(1.1, 1.2, 0.4)));
 
   // Test SceneGraph constructor.
-  auto [scene_graph, geom_id] =
+  auto [scene_graph, geom_id, context, query] =
       MakeSceneGraphWithShape(Box(2.0, 2.0, 2.0), RigidTransformd::Identity());
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
 
   HPolyhedron H_scene_graph(query, geom_id);
   EXPECT_TRUE(CompareMatrices(A, H_scene_graph.A()));
@@ -496,11 +493,8 @@ GTEST_TEST(HPolyhedronTest, L1BallTest) {
 GTEST_TEST(HPolyhedronTest, ArbitraryBoxTest) {
   RigidTransformd X_WG(RotationMatrixd::MakeZRotation(M_PI / 2.0),
                        Vector3d(-4.0, -5.0, -6.0));
-  auto [scene_graph, geom_id] =
+  auto [scene_graph, geom_id, context, query] =
       MakeSceneGraphWithShape(Box(1.0, 2.0, 3.0), X_WG);
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
   HPolyhedron H(query, geom_id);
 
   EXPECT_EQ(H.ambient_dimension(), 3);
@@ -553,10 +547,8 @@ GTEST_TEST(HPolyhedronTest, ArbitraryBoxTest) {
 GTEST_TEST(HPolyhedronTest, HalfSpaceTest) {
   RigidTransformd X_WG(RotationMatrixd::MakeYRotation(M_PI / 2.0),
                        Vector3d(-1.2, -2.1, -6.4));
-  auto [scene_graph, geom_id] = MakeSceneGraphWithShape(HalfSpace(), X_WG);
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
+  auto [scene_graph, geom_id, context, query] =
+      MakeSceneGraphWithShape(HalfSpace(), X_WG);
   HPolyhedron H(query, geom_id);
 
   EXPECT_EQ(H.ambient_dimension(), 3);
@@ -1402,6 +1394,41 @@ GTEST_TEST(HPolyhedronTest, UniformSampleTest3) {
   EXPECT_FALSE(CompareMatrices(A, B, kTol));
 }
 
+// Test that we can draw samples from not-full-dimensional HPolyhedra
+GTEST_TEST(HPolyhedronTest, UniformSampleTest4) {
+  Matrix<double, 2, 2> points;
+  // clang-format off
+  points << 0, 1,
+            0, 1;
+  // clang-format on
+  VPolytope V(points);
+  HPolyhedron H(V);
+  const double kTol = 1e-7;
+
+  // Verify that without passing in the basis of the affine hull,
+  // trying to draw a uniform sample just gives us previous_sample,
+  // since it is not full-dimensional.
+  Vector2d point(0.5, 0.5);
+
+  RandomGenerator generator(1234);
+  VectorXd point_A = H.UniformSample(&generator, point, 10);
+  EXPECT_TRUE(CompareMatrices(point, point_A, kTol));
+
+  // Compute the affine hull, and use this to draw samples.
+  AffineSubspace as(H);
+  MatrixXd basis = as.basis();
+  VectorXd point_B = H.UniformSample(&generator, point, 10, basis);
+  EXPECT_FALSE(CompareMatrices(point, point_B, kTol));
+
+  // Check that a subspace of incompatible shape throws. In this case,
+  // the subspace has four rows, which does not equal the ambient
+  // dimension of the HPolyhedron, which is two.
+  Matrix<double, 4, 1> bad_basis;
+  bad_basis << 0, 1, 2, 3;
+  EXPECT_THROW(H.UniformSample(&generator, point, 1, bad_basis),
+               std::exception);
+}
+
 GTEST_TEST(HPolyhedronTest, Serialize) {
   const HPolyhedron H = HPolyhedron::MakeL1Ball(3);
   const std::string yaml = yaml::SaveYamlString(H);
@@ -1409,6 +1436,357 @@ GTEST_TEST(HPolyhedronTest, Serialize) {
   EXPECT_EQ(H.ambient_dimension(), H2.ambient_dimension());
   EXPECT_TRUE(CompareMatrices(H.A(), H2.A()));
   EXPECT_TRUE(CompareMatrices(H.b(), H2.b()));
+}
+
+GTEST_TEST(HPolyhedronTest, SimplifyByIncrementalFaceTranslation1) {
+  // Test a case where the expected simplified polytope is known:
+  // The circumbody is a square with the top-right and bottom-left corners cut
+  // off (6 faces).  The inbody should remove the two diagonal faces by scaling
+  // the left and right faces in by (min_volume_ratio) ^ (1.0 /
+  // ambient_dimension()).
+  const double kConstraintTol = 1e-6;
+  Eigen::Matrix<double, 6, 2> A;
+  // clang-format off
+  A << 1, 0,  // x <= 2
+       -1, 0,  // -x <= 2
+       0, 1,  // y <= 2
+       0, -1,  // -y <= 2
+       1, 1,  // x + y <= 3.5
+       -1, -1;  // -x - y <= 3.5
+  // clang-format on
+  Eigen::VectorXd b(6);
+  b << 2, 2, 2, 2, 3.5, 3.5;
+  const HPolyhedron circumbody = HPolyhedron(A, b);
+  const double min_volume_ratio = 0.1;
+
+  const HPolyhedron inbody =
+      circumbody.SimplifyByIncrementalFaceTranslation(min_volume_ratio, false);
+
+  Eigen::Matrix<double, 4, 2> A_expected;
+  // clang-format off
+  A_expected << 1, 0,  // x <= 2 * min_volume_ratio ^ (1 / dimension)
+                -1, 0,  // -x <= 2 * min_volume_ratio ^ (1 / dimension)
+                0, 1,  // y <= 2
+                0, -1;  // -y <= 2
+  // clang-format on
+  Eigen::VectorXd b_expected(4);
+  b_expected << 2 * std::pow(min_volume_ratio, 0.5),
+      2 * std::pow(min_volume_ratio, 0.5), 2, 2;
+  const HPolyhedron inbody_expected = HPolyhedron(A_expected, b_expected);
+
+  EXPECT_TRUE(inbody_expected.ContainedIn(inbody, kConstraintTol));
+  EXPECT_TRUE(inbody.ContainedIn(inbody_expected, kConstraintTol));
+}
+
+GTEST_TEST(HPolyhedronTest, SimplifyByIncrementalFaceTranslation2) {
+  // Test that if `min_volume_ratio` = 1, and the circumbody has no redundant
+  // faces, the circumbody is returned unchanged.
+  const int kNumFaces = 20;
+  const double kConstraintTol = 1e-6;
+
+  // Create a polygon in 2D with `kNumFaces` faces from unit circle tangents.
+  MatrixXd A(kNumFaces, 2);
+  for (int row = 0; row < kNumFaces; ++row) {
+    A.row(row) << std::cos(2 * M_PI * row / kNumFaces),
+        std::sin(2 * M_PI * row / kNumFaces);
+  }
+  const VectorXd b = VectorXd::Ones(kNumFaces);
+  const HPolyhedron circumbody = HPolyhedron(A, b);
+  const double min_volume_ratio = 1.0;
+
+  const HPolyhedron inbody =
+      circumbody.SimplifyByIncrementalFaceTranslation(min_volume_ratio, false);
+
+  EXPECT_TRUE(inbody.ContainedIn(circumbody, kConstraintTol));
+  EXPECT_TRUE(circumbody.ContainedIn(inbody, kConstraintTol));
+}
+
+GTEST_TEST(HPolyhedronTest, SimplifyByIncrementalFaceTranslation3) {
+  // Test simplification of `circumbody` subject to keeping whole intersection
+  // with `intersecting_polytope`, with 0 `intersection_padding`.
+  const int kNumFaces = 20;
+  const double kConstraintTol = 1e-6;
+
+  // Create a polygon in 2D with `kNumFaces` faces from unit circle tangents.
+  MatrixXd A(kNumFaces, 2);
+  for (int row = 0; row < kNumFaces; ++row) {
+    A.row(row) << std::cos(2 * M_PI * row / kNumFaces),
+        std::sin(2 * M_PI * row / kNumFaces);
+  }
+  const VectorXd b = VectorXd::Ones(kNumFaces);
+  const HPolyhedron circumbody = HPolyhedron(A, b);
+  const VPolytope circumbody_V(circumbody);  // For volume calculations.
+  const double min_volume_ratio = 0.1;
+
+  // Create a triangle polytope that intersects with the circumbody.
+  Eigen::Matrix<double, 2, 3> verts;
+  // clang-format off
+  verts << 0, 1, -1,
+           0.8, 2, 2;
+  // clang-format on
+  const HPolyhedron intersecting_polytope = HPolyhedron(VPolytope(verts));
+  const std::vector<HPolyhedron> intersecting_polytopes = {
+      intersecting_polytope};
+  const HPolyhedron inbody = circumbody.SimplifyByIncrementalFaceTranslation(
+      min_volume_ratio, false, 10, Eigen::MatrixXd(), intersecting_polytopes,
+      true, 0);
+  EXPECT_TRUE(inbody.ContainedIn(circumbody, kConstraintTol));
+  EXPECT_GE(VPolytope(inbody).CalcVolume() / circumbody_V.CalcVolume(),
+            min_volume_ratio);
+  EXPECT_LE(inbody.b().rows(), circumbody.b().rows());
+  // Check if intersection is still contained.
+  EXPECT_TRUE((circumbody.Intersection(intersecting_polytope)
+                   .ContainedIn(inbody, kConstraintTol)));
+}
+
+GTEST_TEST(HPolyhedronTest, SimplifyByIncrementalFaceTranslation4) {
+  // Test that non-zero `intersection_padding` does not break anything from the
+  // last test.
+  const int kNumFaces = 20;
+  const double kConstraintTol = 1e-6;
+
+  // Create a polygon in 2D with `kNumFaces` faces from unit circle tangents.
+  MatrixXd A(kNumFaces, 2);
+  for (int row = 0; row < kNumFaces; ++row) {
+    A.row(row) << std::cos(2 * M_PI * row / kNumFaces),
+        std::sin(2 * M_PI * row / kNumFaces);
+  }
+  const VectorXd b = VectorXd::Ones(kNumFaces);
+  const HPolyhedron circumbody = HPolyhedron(A, b);
+  const VPolytope circumbody_V(circumbody);  // For volume calculations.
+  const double min_volume_ratio = 0.1;
+
+  // Create a triangle polytope that intersects with the circumbody.
+  Eigen::Matrix<double, 2, 3> verts;
+  // clang-format off
+  verts << 0, 1, -1,
+           0.8, 2, 2;
+  // clang-format on
+  const HPolyhedron intersecting_polytope = HPolyhedron(VPolytope(verts));
+  const std::vector<HPolyhedron> intersecting_polytopes = {
+      intersecting_polytope};
+
+  const HPolyhedron inbody = circumbody.SimplifyByIncrementalFaceTranslation(
+      min_volume_ratio, false, 10, Eigen::MatrixXd(), intersecting_polytopes,
+      true, 0.1);
+  EXPECT_TRUE(inbody.ContainedIn(circumbody, kConstraintTol));
+  EXPECT_GE(VPolytope(inbody).CalcVolume() / circumbody_V.CalcVolume(),
+            min_volume_ratio);
+  EXPECT_LE(inbody.b().rows(), circumbody.b().rows());
+  // Check if intersection is still contained.
+  EXPECT_TRUE((circumbody.Intersection(intersecting_polytope)
+                   .ContainedIn(inbody, kConstraintTol)));
+}
+
+GTEST_TEST(HPolyhedronTest, SimplifyByIncrementalFaceTranslation5) {
+  // Test with affine transformation.
+  const int kNumFaces = 20;
+  // Containment constraint needs higher tolerance after affine transformation.
+  const double kAffineTransformationConstraintTol = 1e-4;
+
+  // Create a polygon in 2D with `kNumFaces` faces from unit circle tangents.
+  MatrixXd A(kNumFaces, 2);
+  for (int row = 0; row < kNumFaces; ++row) {
+    A.row(row) << std::cos(2 * M_PI * row / kNumFaces),
+        std::sin(2 * M_PI * row / kNumFaces);
+  }
+  const VectorXd b = VectorXd::Ones(kNumFaces);
+  const HPolyhedron circumbody = HPolyhedron(A, b);
+  const VPolytope circumbody_V(circumbody);  // For volume calculations.
+  const double min_volume_ratio = 0.1;
+
+  // Create a triangle polytope that intersects with the circumbody.
+  Eigen::Matrix<double, 2, 3> verts;
+  // clang-format off
+  verts << 0, 1, -1,
+           0.8, 2, 2;
+  // clang-format on
+  const HPolyhedron intersecting_polytope = HPolyhedron(VPolytope(verts));
+  const std::vector<HPolyhedron> intersecting_polytopes = {
+      intersecting_polytope};
+  const HPolyhedron inbody = circumbody.SimplifyByIncrementalFaceTranslation(
+      min_volume_ratio, true, 10, Eigen::MatrixXd(), intersecting_polytopes,
+      false);
+  EXPECT_TRUE(
+      inbody.ContainedIn(circumbody, kAffineTransformationConstraintTol));
+  EXPECT_GE(VPolytope(inbody).CalcVolume() / circumbody_V.CalcVolume(),
+            min_volume_ratio);
+  EXPECT_LE(inbody.b().rows(), circumbody.b().rows());
+  // We only expect to maintain part of the intersection, not to contain the
+  // whole original intersection.
+  EXPECT_TRUE(inbody.IntersectsWith(intersecting_polytope));
+}
+
+GTEST_TEST(HPolyhedronTest, SimplifyByIncrementalFaceTranslation6) {
+  // Test with points to contain.
+  const int kNumFaces = 20;
+  const double kConstraintTol = 1e-6;
+
+  // Create a polygon in 2D with `kNumFaces` faces from unit circle tangents.
+  MatrixXd A(kNumFaces, 2);
+  for (int row = 0; row < kNumFaces; ++row) {
+    A.row(row) << std::cos(2 * M_PI * row / kNumFaces),
+        std::sin(2 * M_PI * row / kNumFaces);
+  }
+  const VectorXd b = VectorXd::Ones(kNumFaces);
+  const HPolyhedron circumbody = HPolyhedron(A, b);
+  const VPolytope circumbody_V(circumbody);  // For volume calculations.
+  const double min_volume_ratio = 0.1;
+
+  Eigen::Matrix<double, 2, 3> points;
+  // clang-format off
+  points << 0, 0.7, -0.7,
+           -1, 0.7, 0.7;
+  // clang-format on
+  const HPolyhedron inbody = circumbody.SimplifyByIncrementalFaceTranslation(
+      min_volume_ratio, false, 10, points);
+  EXPECT_TRUE(inbody.ContainedIn(circumbody, kConstraintTol));
+  EXPECT_GE(VPolytope(inbody).CalcVolume() / circumbody_V.CalcVolume(),
+            min_volume_ratio);
+  EXPECT_LE(inbody.b().rows(), circumbody.b().rows());
+  for (int i_point = 0; i_point < points.cols(); ++i_point) {
+    EXPECT_TRUE(inbody.PointInSet(points.col(i_point), kConstraintTol));
+  }
+}
+
+GTEST_TEST(HPolyhedronTest, SimplifyByIncrementalFaceTranslation7) {
+  // Test with intersection, points to contain, and affine transformation
+  const int kNumFaces = 20;
+  const double kConstraintTol = 1e-6;
+  // Containment constraint needs higher tolerance after affine transformation.
+  const double kAffineTransformationConstraintTol = 1e-4;
+
+  // Create a polygon in 2D with `kNumFaces` faces from unit circle tangents.
+  MatrixXd A(kNumFaces, 2);
+  for (int row = 0; row < kNumFaces; ++row) {
+    A.row(row) << std::cos(2 * M_PI * row / kNumFaces),
+        std::sin(2 * M_PI * row / kNumFaces);
+  }
+  const VectorXd b = VectorXd::Ones(kNumFaces);
+  const HPolyhedron circumbody = HPolyhedron(A, b);
+  const VPolytope circumbody_V(circumbody);  // For volume calculations.
+  const double min_volume_ratio = 0.1;
+
+  // Create a triangle polytope that intersects with the circumbody.
+  Eigen::Matrix<double, 2, 3> verts;
+  // clang-format off
+  verts << 0, 1, -1,
+           0.8, 2, 2;
+  // clang-format on
+  const HPolyhedron intersecting_polytope = HPolyhedron(VPolytope(verts));
+  const std::vector<HPolyhedron> intersecting_polytopes = {
+      intersecting_polytope};
+
+  Eigen::Matrix<double, 2, 3> points;
+  // clang-format off
+  points << 0, 0.7, -0.7,
+           -1, 0.7, 0.7;
+  // clang-format on
+
+  const HPolyhedron inbody = circumbody.SimplifyByIncrementalFaceTranslation(
+      min_volume_ratio, true, 10, points, intersecting_polytopes, false);
+  EXPECT_TRUE(
+      inbody.ContainedIn(circumbody, kAffineTransformationConstraintTol));
+  EXPECT_GE(VPolytope(inbody).CalcVolume() / circumbody_V.CalcVolume(),
+            min_volume_ratio);
+  EXPECT_LE(inbody.b().rows(), circumbody.b().rows());
+  EXPECT_TRUE(inbody.IntersectsWith(intersecting_polytope));
+  for (int i_point = 0; i_point < points.cols(); ++i_point) {
+    EXPECT_TRUE(inbody.PointInSet(points.col(i_point), kConstraintTol));
+  }
+}
+
+GTEST_TEST(HPolyhedronTest, MaximumVolumeInscribedAffineTransformationTest1) {
+  const double kConstraintTol = 1e-4;
+  const int kNumFaces = 4;
+  const int kDimension = 2;
+
+  // Test optimizing affine transformation of initially small polytope that is
+  // not contained in circumbody.
+  MatrixXd circumbody_A(kNumFaces, kDimension);
+  for (int row = 0; row < kNumFaces; ++row) {
+    circumbody_A.row(row) << std::cos(2 * M_PI * row / kNumFaces),
+        std::sin(2 * M_PI * row / kNumFaces);
+  }
+  const VectorXd circumbody_b = VectorXd::Ones(kNumFaces);
+  HPolyhedron circumbody = HPolyhedron(circumbody_A, circumbody_b);
+
+  // clang-format off
+  Eigen::Matrix<double, 2, 4> initial_polytope_verts;
+  initial_polytope_verts << 1.4, 0.8, 0, 0.2,
+                            0.5, 0.6, -0.2, 0.1;
+  // clang-format on
+  HPolyhedron initial_polytope = HPolyhedron(VPolytope(initial_polytope_verts));
+
+  HPolyhedron inbody =
+      initial_polytope.MaximumVolumeInscribedAffineTransformation(circumbody);
+
+  // Check containment, and that volume increased.
+  EXPECT_TRUE(inbody.ContainedIn(circumbody, kConstraintTol));
+}
+
+GTEST_TEST(HPolyhedronTest, MaximumVolumeInscribedAffineTransformationTest2) {
+  const double kConstraintTol = 1e-4;
+  const int kNumFaces = 4;
+  const int kDimension = 2;
+
+  // Test optimizing affine transformation of initially small polytope that is
+  // contained in circumbody.
+  MatrixXd circumbody_A(kNumFaces, kDimension);
+  for (int row = 0; row < kNumFaces; ++row) {
+    circumbody_A.row(row) << std::cos(2 * M_PI * row / kNumFaces),
+        std::sin(2 * M_PI * row / kNumFaces);
+  }
+  const VectorXd circumbody_b = VectorXd::Ones(kNumFaces);
+  HPolyhedron circumbody = HPolyhedron(circumbody_A, circumbody_b);
+
+  // clang-format off
+  Eigen::Matrix<double, 2, 4> initial_polytope_verts;
+  initial_polytope_verts << 0.4, 0.8, 0, -0.5,
+                            -0.2, 0.6, -0.2, 0.5;
+  // clang-format on
+  HPolyhedron initial_polytope = HPolyhedron(VPolytope(initial_polytope_verts));
+
+  HPolyhedron inbody =
+      initial_polytope.MaximumVolumeInscribedAffineTransformation(circumbody);
+
+  // Check containment, and that volume increased.
+  EXPECT_TRUE(inbody.ContainedIn(circumbody, kConstraintTol));
+  EXPECT_GE(VPolytope(inbody).CalcVolume(),
+            VPolytope(initial_polytope).CalcVolume());
+}
+
+GTEST_TEST(HPolyhedronTest, BoundednessCheckEmptyEdgeCases) {
+  // An empty HPolyhedron in ℝ^3, defined by x1 <= -1 and x1 >= 0. This checks
+  // the special case when there are fewer rows than columns.
+  MatrixXd A = MatrixXd::Zero(2, 3);
+  VectorXd b = VectorXd::Zero(2);
+  A(0, 0) = 1;
+  A(1, 0) = -1;
+  b(0) = -1;
+  HPolyhedron h(A, b);
+  EXPECT_TRUE(h.IsEmpty());
+  EXPECT_TRUE(h.IsBounded());
+
+  // An empty HPolyhedron in ℝ^1, defined by the constraint 0x <= -1 and
+  // 0x <= 0. This checks the special case where the kernel has positive
+  // dimension.
+  A = MatrixXd::Zero(2, 1);
+  h = HPolyhedron{A, b};
+  EXPECT_TRUE(h.IsEmpty());
+  EXPECT_TRUE(h.IsBounded());
+
+  // An empty HPolyhedron in ℝ^2, defined by the constraints x1 <= -1, x1 >= 0,
+  // and x2 >= 0. This checks the special case where Stiemke's theorem of
+  // alternatives would otherwise suggest it to be unbounded.
+  A = MatrixXd::Zero(3, 2);
+  A(0, 0) = 1;
+  A(1, 0) = -1;
+  A(2, 1) = -1;
+  b = Vector3d(-1, 0, 0);
+  h = HPolyhedron(A, b);
+  EXPECT_TRUE(h.IsEmpty());
+  EXPECT_TRUE(h.IsBounded());
 }
 
 }  // namespace optimization

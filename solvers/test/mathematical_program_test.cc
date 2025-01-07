@@ -56,6 +56,7 @@ using drake::symbolic::Variable;
 using drake::symbolic::test::ExprEqual;
 using drake::symbolic::test::PolyEqual;
 using drake::symbolic::test::PolyNotEqual;
+using drake::symbolic::test::TupleVarEqual;
 
 using std::all_of;
 using std::cref;
@@ -857,8 +858,7 @@ GTEST_TEST(TestMathematicalProgram, TestBadBindingVariable) {
   f.setConstant(2);
   lb.setConstant(0);
   ub.setConstant(1);
-  Eigen::Matrix3d twiceA = 2 * A;
-  vector<Eigen::Ref<const MatrixXd>> F{A, twiceA};
+  vector<MatrixXd> F{A, 2 * A};
   shared_ptr<EvaluatorBase> func = MakeFunctionEvaluator(Movable());
 
   // Test each constraint type.
@@ -1055,7 +1055,8 @@ GTEST_TEST(TestMathematicalProgram, AddCostTest) {
   EXPECT_EQ(static_cast<int>(prog.generic_costs().size()), num_generic_costs);
   EXPECT_EQ(prog.linear_costs().size(), 0u);
 
-  shared_ptr<Cost> generic_trivial_cost1 = make_shared<GenericTrivialCost1>();
+  shared_ptr<Cost> generic_trivial_cost1 =
+      make_shared<GenericTrivialCost1>(true);
 
   // Adds Binding<Constraint>
   prog.AddCost(Binding<Cost>(generic_trivial_cost1,
@@ -1100,9 +1101,14 @@ GTEST_TEST(TestMathematicalProgram, AddCostTest) {
 
 class EmptyConstraint final : public Constraint {
  public:
-  EmptyConstraint()
+  // This evaluator is thread safe in general. However, for the sake of testing
+  // we allow the constructor argument which changes the value of
+  // is_thread_safe.
+  explicit EmptyConstraint(bool is_thread_safe = true)
       : Constraint(0, 2, Eigen::VectorXd(0), Eigen::VectorXd(0),
-                   "empty_constraint") {}
+                   "empty_constraint") {
+    set_is_thread_safe(is_thread_safe);
+  }
 
   ~EmptyConstraint() {}
 
@@ -1155,7 +1161,7 @@ GTEST_TEST(TestMathematicalProgram, AddEmptyConstraint) {
 
   auto binding7 =
       prog.AddConstraint(std::make_shared<LinearMatrixInequalityConstraint>(
-                             std::vector<Eigen::Ref<const Eigen::MatrixXd>>(
+                             std::vector<Eigen::MatrixXd>(
                                  {Eigen::MatrixXd(0, 0), Eigen::MatrixXd(0, 0),
                                   Eigen::MatrixXd(0, 0)})),
                          x);
@@ -2566,6 +2572,34 @@ bool AreTwoPolynomialsNear(
 }  // namespace
 
 void CheckParsedSymbolicLorentzConeConstraint(
+    MathematicalProgram* prog, const Formula& f,
+    LorentzConeConstraint::EvalType eval_type) {
+  const auto& binding1 = prog->AddLorentzConeConstraint(f, eval_type);
+  EXPECT_EQ(binding1.evaluator()->eval_type(), eval_type);
+  const auto& binding2 = prog->lorentz_cone_constraints().back();
+  EXPECT_EQ(binding1.evaluator(), binding2.evaluator());
+  EXPECT_EQ(binding1.variables(), binding2.variables());
+  const Eigen::MatrixXd A = binding1.evaluator()->A();
+  const Eigen::VectorXd b = binding1.evaluator()->b();
+  const VectorX<Expression> z = A * binding1.variables() + b;
+  Expression greater, lesser;
+  if (is_greater_than_or_equal_to(f)) {
+    greater = get_lhs_expression(f);
+    lesser = get_rhs_expression(f);
+  } else {
+    ASSERT_TRUE(is_less_than_or_equal_to(f));
+    greater = get_rhs_expression(f);
+    lesser = get_lhs_expression(f);
+  }
+  EXPECT_TRUE(symbolic::test::PolynomialEqual(
+      symbolic::Polynomial(z(0)), symbolic::Polynomial(greater), 1E-10));
+  ASSERT_TRUE(is_sqrt(lesser));
+  EXPECT_TRUE(symbolic::test::PolynomialEqual(
+      symbolic::Polynomial(z.tail(z.rows() - 1).squaredNorm()),
+      symbolic::Polynomial(get_argument(lesser)), 1E-10));
+}
+
+void CheckParsedSymbolicLorentzConeConstraint(
     MathematicalProgram* prog, const Expression& linear_expr,
     const Expression& quadratic_expr,
     LorentzConeConstraint::EvalType eval_type) {
@@ -2641,6 +2675,22 @@ class SymbolicLorentzConeTest : public ::testing::Test {
   MathematicalProgram prog_;
   VectorDecisionVariable<3> x_;
 };
+
+TEST_F(SymbolicLorentzConeTest, Formula) {
+  CheckParsedSymbolicLorentzConeConstraint(
+      &prog_, 2.0 * x_(2) >= x_.head<2>().cast<Expression>().norm(),
+      LorentzConeConstraint::EvalType::kConvex);
+
+  CheckParsedSymbolicLorentzConeConstraint(
+      &prog_, x_.head<2>().cast<Expression>().norm() <= 2.0 * x_(2),
+      LorentzConeConstraint::EvalType::kConvex);
+
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      prog_.AddLorentzConeConstraint(
+          2.0 * x_(2) * x_(1) >= x_.head<2>().cast<Expression>().norm(),
+          LorentzConeConstraint::EvalType::kConvex),
+      ".*non-linear.*");
+}
 
 TEST_F(SymbolicLorentzConeTest, Test1) {
   // Add Lorentz cone constraint:
@@ -2987,8 +3037,7 @@ GTEST_TEST(TestMathematicalProgram,
   // clang-format on
 
   auto psd_cnstr =
-      prog.AddPrincipalSubmatrixIsPsdConstraint(X, minor_indices)
-          .evaluator();
+      prog.AddPrincipalSubmatrixIsPsdConstraint(X, minor_indices).evaluator();
   EXPECT_EQ(prog.positive_semidefinite_constraints().size(), 1);
   EXPECT_EQ(prog.GetAllConstraints().size(), 1);
   const auto& new_psd_cnstr = prog.positive_semidefinite_constraints().back();
@@ -3009,41 +3058,55 @@ GTEST_TEST(TestMathematicalProgram,
                   X(3, 0), X(3, 1), X(3, 3);
   // clang-format on
 
-  auto psd_cnstr = prog.AddPrincipalSubmatrixIsPsdConstraint(
+  auto lmi_cnstr = prog.AddPrincipalSubmatrixIsPsdConstraint(
                            2 * Matrix4d::Identity() * X, minor_indices)
                        .evaluator();
 
-  EXPECT_EQ(prog.positive_semidefinite_constraints().size(), 1);
-  EXPECT_EQ(prog.GetAllConstraints().size(), 2);
+  EXPECT_EQ(prog.linear_matrix_inequality_constraints().size(), 1);
+  EXPECT_EQ(prog.GetAllConstraints().size(), 1);
 
-  const auto& new_psd_cnstr = prog.positive_semidefinite_constraints().back();
-  EXPECT_EQ(psd_cnstr.get(), new_psd_cnstr.evaluator().get());
+  const auto& new_lmi_cnstr =
+      prog.linear_matrix_inequality_constraints().back();
+  EXPECT_EQ(lmi_cnstr.get(), new_lmi_cnstr.evaluator().get());
 
   MathematicalProgram prog_manual;
   prog_manual.AddDecisionVariables(minor_manual);
-  auto psd_cnstr_manual = prog_manual
-                              .AddPositiveSemidefiniteConstraint(
+  auto lmi_cnstr_manual = prog_manual
+                              .AddLinearMatrixInequalityConstraint(
                                   2 * Matrix3d::Identity() * minor_manual)
                               .evaluator();
-  const auto& new_psd_cnstr_manual =
-      prog.positive_semidefinite_constraints().back();
+  const auto& new_lmi_cnstr_manual =
+      prog.linear_matrix_inequality_constraints().back();
 
-  EXPECT_TRUE(CheckStructuralEquality(new_psd_cnstr_manual.variables(),
-                                      new_psd_cnstr.variables()));
-  EXPECT_EQ(prog.positive_semidefinite_constraints().size(),
-            prog_manual.positive_semidefinite_constraints().size());
+  EXPECT_TRUE(CheckStructuralEquality(new_lmi_cnstr_manual.variables(),
+                                      new_lmi_cnstr.variables()));
+  EXPECT_EQ(prog.linear_matrix_inequality_constraints().size(),
+            prog_manual.linear_matrix_inequality_constraints().size());
   EXPECT_EQ(prog.linear_equality_constraints().size(),
             prog_manual.linear_equality_constraints().size());
-  EXPECT_EQ(prog.linear_equality_constraints().size(), 1);
+  EXPECT_TRUE(prog.linear_equality_constraints().empty());
   EXPECT_EQ(prog.GetAllConstraints().size(),
             prog_manual.GetAllConstraints().size());
+}
 
-  EXPECT_TRUE(CompareMatrices(
-      prog.linear_equality_constraints()[0].evaluator()->upper_bound(),
-      prog_manual.linear_equality_constraints()[0].evaluator()->upper_bound()));
-  EXPECT_TRUE(CompareMatrices(
-      prog.linear_equality_constraints()[0].evaluator()->lower_bound(),
-      prog_manual.linear_equality_constraints()[0].evaluator()->lower_bound()));
+GTEST_TEST(TestMathematicalProgram, AddLinearMatrixInequalityConstraint) {
+  MathematicalProgram prog;
+  auto x = prog.NewContinuousVariables<3>();
+  Matrix3<symbolic::Expression> X;
+  // clang-format off
+  X << 1,                   2 + x(0) - 3 * x(1), 0,
+       2 + x(0) - 3 * x(1), 2 * x(2),           -3,
+       0,                   -3,                  1 + 2 * x(1);
+  // clang-format on
+  const auto lmi_binding = prog.AddLinearMatrixInequalityConstraint(X);
+  EXPECT_TRUE(prog.required_capabilities().contains(
+      ProgramAttribute::kPositiveSemidefiniteConstraint));
+  Matrix3<symbolic::Expression> X_expected = lmi_binding.evaluator()->F()[0];
+  for (int i = 0; i < lmi_binding.variables().rows(); ++i) {
+    X_expected +=
+        lmi_binding.evaluator()->F()[1 + i] * lmi_binding.variables()(i);
+  }
+  EXPECT_TRUE(MatrixExprAllEqual(X, X_expected));
 }
 
 GTEST_TEST(TestMathematicalProgram, TestExponentialConeConstraint) {
@@ -3287,27 +3350,41 @@ GTEST_TEST(TestMathematicalProgram, AddL2NormCost) {
 
   auto obj1 =
       prog.AddCost(Binding<L2NormCost>(std::make_shared<L2NormCost>(A, b), x));
-  EXPECT_TRUE(prog.required_capabilities().contains(
-      ProgramAttribute::kL2NormCost));
+  EXPECT_TRUE(
+      prog.required_capabilities().contains(ProgramAttribute::kL2NormCost));
   EXPECT_EQ(prog.l2norm_costs().size(), 1u);
   EXPECT_EQ(prog.GetAllCosts().size(), 1u);
 
   auto obj2 = prog.AddL2NormCost(A, b, x);
   EXPECT_EQ(prog.l2norm_costs().size(), 2u);
 
+  symbolic::Expression e = (A * x + b).norm();
+  auto obj3 = prog.AddL2NormCost(e, 1e-8, 1e-8);
+  EXPECT_EQ(prog.l2norm_costs().size(), 3u);
+
+  // Test that the AddCost method correctly recognizes the L2norm.
+  auto obj4 = prog.AddCost(e);
+  EXPECT_EQ(prog.l2norm_costs().size(), 4u);
+
   prog.RemoveCost(obj1);
   prog.RemoveCost(obj2);
+  prog.RemoveCost(obj3);
+  prog.RemoveCost(obj4);
   EXPECT_EQ(prog.l2norm_costs().size(), 0u);
-  EXPECT_FALSE(prog.required_capabilities().contains(
-      ProgramAttribute::kL2NormCost));
+  EXPECT_FALSE(
+      prog.required_capabilities().contains(ProgramAttribute::kL2NormCost));
 
   prog.AddL2NormCost(A, b, {x.head<1>(), x.tail<1>()});
   EXPECT_EQ(prog.l2norm_costs().size(), 1u);
-  EXPECT_TRUE(prog.required_capabilities().contains(
-      ProgramAttribute::kL2NormCost));
+  EXPECT_TRUE(
+      prog.required_capabilities().contains(ProgramAttribute::kL2NormCost));
 
   auto new_prog = prog.Clone();
   EXPECT_EQ(new_prog->l2norm_costs().size(), 1u);
+
+  // AddL2NormCost(Expression) can throw.
+  e = (A * x + b).squaredNorm();
+  DRAKE_EXPECT_THROWS_MESSAGE(prog.AddL2NormCost(e), ".*is not an L2 norm.*");
 }
 
 GTEST_TEST(TestMathematicalProgram, AddQuadraticConstraint) {
@@ -3558,7 +3635,8 @@ GTEST_TEST(TestMathematicalProgram, TestClone) {
   auto X = prog.NewSymmetricContinuousVariables<3>("X");
 
   // Add costs
-  shared_ptr<Cost> generic_trivial_cost1 = make_shared<GenericTrivialCost1>();
+  shared_ptr<Cost> generic_trivial_cost1 =
+      make_shared<GenericTrivialCost1>(true);
   prog.AddCost(Binding<Cost>(generic_trivial_cost1,
                              VectorDecisionVariable<3>(x(0), x(1), x(2))));
   GenericTrivialCost2 generic_trivial_cost2;
@@ -3594,7 +3672,7 @@ GTEST_TEST(TestMathematicalProgram, TestClone) {
   prog.AddRotatedLorentzConeConstraint(
       Vector4<symbolic::Expression>(x(0) + x(1), x(1) + x(2), +x(0), +x(1)));
   prog.AddPositiveSemidefiniteConstraint(X);
-  prog.AddPositiveSemidefiniteConstraint(X - Eigen::Matrix3d::Ones());
+  prog.AddLinearMatrixInequalityConstraint(X - Eigen::Matrix3d::Ones());
   int num_all_constraints = prog.GetAllConstraints().size();
   prog.AddLinearMatrixInequalityConstraint(
       {Eigen::Matrix2d::Identity(), Eigen::Matrix2d::Ones(),
@@ -3880,7 +3958,9 @@ GTEST_TEST(TestMathematicalProgram, TestAddVisualizationCallback) {
   EXPECT_TRUE(was_called);
 }
 
-GTEST_TEST(TestMathematicalProgram, TestSolverOptions) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+GTEST_TEST(TestMathematicalProgram, DeprecatedTestSolverOptions) {
   MathematicalProgram prog;
   const SolverId solver_id("solver_id");
   const SolverId wrong_solver_id("wrong_solver_id");
@@ -3909,6 +3989,44 @@ GTEST_TEST(TestMathematicalProgram, TestSolverOptions) {
   EXPECT_EQ(prog.GetSolverOptionsInt(solver_id).size(), 0);
   EXPECT_EQ(prog.GetSolverOptionsStr(dummy_id).at("string_name"), "30.0");
   EXPECT_EQ(prog.GetSolverOptionsStr(solver_id).size(), 0);
+}
+#pragma GCC diagnostic pop
+
+GTEST_TEST(TestMathematicalProgram, TestSolverOptions) {
+  MathematicalProgram prog;
+  const SolverId solver_id("solver_id");
+
+  // Set each type once, directly on the program.
+  prog.SetSolverOption(solver_id, "double_name", 1.0);
+  EXPECT_THAT(prog.solver_options().options.at("solver_id").at("double_name"),
+              testing::VariantWith<double>(1.0));
+  prog.SetSolverOption(solver_id, "int_name", 2);
+  EXPECT_THAT(prog.solver_options().options.at("solver_id").at("int_name"),
+              testing::VariantWith<int>(2));
+  prog.SetSolverOption(solver_id, "string_name", "3");
+  EXPECT_THAT(prog.solver_options().options.at("solver_id").at("string_name"),
+              testing::VariantWith<std::string>("3"));
+
+  // The only solver with options set is the "solver_id".
+  EXPECT_EQ(prog.solver_options().options.size(), 1);
+
+  // Set each type once on an options struct, then set that onto the program.
+  // It erases all of the prior options.
+  const SolverId dummy_id("dummy_id");
+  SolverOptions dummy_options;
+  dummy_options.SetOption(dummy_id, "double_name", 10.0);
+  dummy_options.SetOption(dummy_id, "int_name", 20);
+  dummy_options.SetOption(dummy_id, "string_name", "30.0");
+  prog.SetSolverOptions(dummy_options);
+  EXPECT_THAT(prog.solver_options().options.at("dummy_id").at("double_name"),
+              testing::VariantWith<double>(10.0));
+  EXPECT_THAT(prog.solver_options().options.at("dummy_id").at("int_name"),
+              testing::VariantWith<int>(20));
+  EXPECT_THAT(prog.solver_options().options.at("dummy_id").at("string_name"),
+              testing::VariantWith<std::string>("30.0"));
+
+  // The only solver with options set is the "dummy_id".
+  EXPECT_EQ(prog.solver_options().options.size(), 1);
 }
 
 void CheckNewSosPolynomial(MathematicalProgram::NonnegativePolynomial type) {
@@ -4379,6 +4497,70 @@ GTEST_TEST(TestMathematicalProgram, TestToString) {
   EXPECT_THAT(s, testing::HasSubstr("3"));
 }
 
+GTEST_TEST(TestMathematicalProgram, RemoveDecisionVariable) {
+  // A program where x(1) is not associated with any cost/constraint.
+  MathematicalProgram prog;
+  auto x = prog.NewContinuousVariables<3>();
+  prog.AddLinearCost(x(0) + x(2));
+  prog.AddBoundingBoxConstraint(0, 2, x(0));
+  prog.AddLinearConstraint(x(0) + 2 * x(2) <= 1);
+  prog.SetInitialGuess(x, Eigen::Vector3d(0, 1, 2));
+  prog.SetVariableScaling(x(0), 0.5);
+  prog.SetVariableScaling(x(1), 3.0);
+  prog.SetVariableScaling(x(2), 4.0);
+
+  // Remove x(1) and check that all accessors remain in sync.
+  const int x1_index = prog.FindDecisionVariableIndex(x(1));
+  const int x1_index_removed = prog.RemoveDecisionVariable(x(1));
+  EXPECT_EQ(x1_index, x1_index_removed);
+  EXPECT_EQ(prog.num_vars(), 2);
+  EXPECT_EQ(prog.FindDecisionVariableIndex(x(0)), 0);
+  EXPECT_EQ(prog.FindDecisionVariableIndex(x(2)), 1);
+  EXPECT_THAT(prog.decision_variables(),
+              testing::Pointwise(testing::Truly(TupleVarEqual), {x(0), x(2)}));
+  EXPECT_TRUE(CompareMatrices(prog.initial_guess(), Eigen::Vector2d(0, 2)));
+  EXPECT_THAT(prog.GetVariableScaling(),
+              testing::WhenSorted(testing::ElementsAre(
+                  std::make_pair(0, 0.5), std::make_pair(1, 4.0))));
+}
+
+GTEST_TEST(TestMathematicalProgram, RemoveDecisionVariableError) {
+  // Test RemoveDecisionVariable with erroneous input.
+  // Remove an indeterminate.
+  MathematicalProgram prog;
+  auto x = prog.NewContinuousVariables<3>("x");
+  auto y = prog.NewIndeterminates<2>("y");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      prog.RemoveDecisionVariable(y(0)),
+      ".*is not a decision variable of this MathematicalProgram.");
+
+  // Remove a variable not in Mathematical program.
+  const symbolic::Variable dummy("dummy");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      prog.RemoveDecisionVariable(dummy),
+      ".*is not a decision variable of this MathematicalProgram.");
+
+  // Remove a variable associated with a cost.
+  prog.AddLinearCost(x(0));
+  DRAKE_EXPECT_THROWS_MESSAGE(prog.RemoveDecisionVariable(x(0)),
+                              ".* is associated with a LinearCost.*");
+
+  // Remove a variable associated with a constraint.
+  prog.AddLinearConstraint(x(0) + x(1) <= 1);
+  DRAKE_EXPECT_THROWS_MESSAGE(prog.RemoveDecisionVariable(x(1)),
+                              ".* is associated with a LinearConstraint[^]*");
+
+  // Remove a variable associated with a visualization callback.
+  prog.AddVisualizationCallback(
+      [](const Eigen::VectorXd& vars) {
+        drake::log()->info("{}", vars(0));
+      },
+      Vector1<symbolic::Variable>(x(2)));
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      prog.RemoveDecisionVariable(x(2)),
+      ".* is associated with a VisualizationCallback[^]*");
+}
+
 GTEST_TEST(TestMathematicalProgram, TestToLatex) {
   MathematicalProgram prog;
   std::string empty_prog = prog.ToLatex();
@@ -4494,6 +4676,24 @@ GTEST_TEST(TestMathematicalProgram, RemoveConstraint) {
   TestRemoveConstraint(&prog, lcp_con,
                        &(prog.linear_complementarity_constraints()),
                        ProgramAttribute::kLinearComplementarityConstraint);
+}
+
+GTEST_TEST(TestMathematicalProgram, RemoveVisualizationCallback) {
+  MathematicalProgram prog;
+  auto x = prog.NewContinuousVariables<3>();
+  auto callback = prog.AddVisualizationCallback(
+      [](const Eigen::VectorXd& vars) {
+        drake::log()->info("{}", vars(0) + vars(1));
+      },
+      x);
+  EXPECT_FALSE(prog.visualization_callbacks().empty());
+  EXPECT_TRUE(
+      prog.required_capabilities().contains(ProgramAttribute::kCallback));
+  int count = prog.RemoveVisualizationCallback(callback);
+  EXPECT_EQ(count, 1);
+  EXPECT_TRUE(prog.visualization_callbacks().empty());
+  EXPECT_FALSE(
+      prog.required_capabilities().contains(ProgramAttribute::kCallback));
 }
 
 class ApproximatePSDConstraint : public ::testing::Test {
@@ -4748,7 +4948,66 @@ GTEST_TEST(MathematicalProgramTest, AddLogDeterminantLowerBoundConstraint) {
     EXPECT_TRUE(constraint.variables()(i).equal_to(t(i)));
   }
   EXPECT_EQ(prog.exponential_cone_constraints().size(), 3);
-  EXPECT_EQ(prog.positive_semidefinite_constraints().size(), 1);
+  EXPECT_EQ(prog.linear_matrix_inequality_constraints().size(), 1);
+}
+
+class EmptyCost final : public Cost {
+ public:
+  // This cost is thread safe in general. However, for the sake of testing
+  // we allow the constructor argument which changes the value of
+  // is_thread_safe.
+  explicit EmptyCost(bool is_thread_safe = true) : Cost(0) {
+    set_is_thread_safe(is_thread_safe);
+  }
+
+  ~EmptyCost() {}
+
+ private:
+  void DoEval(const Eigen::Ref<const Eigen::VectorXd>&, VectorXd*) const {}
+  void DoEval(const Eigen::Ref<const AutoDiffVecXd>&, AutoDiffVecXd*) const {}
+  void DoEval(const Eigen::Ref<const VectorX<symbolic::Variable>>&,
+              VectorX<symbolic::Expression>*) const {}
+};
+
+GTEST_TEST(MathematicalProgramIsThreadSafe, MathematicalProgramIsThreadSafe) {
+  MathematicalProgram prog;
+  EXPECT_TRUE(prog.IsThreadSafe());
+
+  auto x = prog.NewContinuousVariables<2>();
+  auto linear_constraint = prog.AddLinearConstraint(x[0] <= 0);
+  EXPECT_TRUE(prog.IsThreadSafe());
+
+  // A constraint marked as non-thread safe.
+  auto non_thread_safe_constraint_binding =
+      prog.AddConstraint(x[0] * x[1] * x[1] == 1.);
+  EXPECT_FALSE(prog.IsThreadSafe());
+
+  prog.RemoveConstraint(linear_constraint);
+  EXPECT_FALSE(prog.IsThreadSafe());
+
+  prog.RemoveConstraint(non_thread_safe_constraint_binding);
+  // The program has no costs and constraints, therefore it is thread safe.
+  EXPECT_TRUE(prog.IsThreadSafe());
+
+  auto linear_cost = prog.AddLinearCost(x[0]);
+  EXPECT_TRUE(prog.IsThreadSafe());
+
+  // A cost marked as non-thread safe.
+  auto non_thread_safe_cost_binding = prog.AddCost(x[0] * x[1] * x[1]);
+  EXPECT_FALSE(prog.IsThreadSafe());
+
+  // The only cost and constraint is the thread-safe linear cost.
+  prog.RemoveCost(non_thread_safe_cost_binding);
+  EXPECT_TRUE(prog.IsThreadSafe());
+
+  auto my_callback = [](const Eigen::Ref<const Eigen::VectorXd>& v) {
+    EXPECT_EQ(v.size(), 2);
+    EXPECT_EQ(v(0), 1.);
+    EXPECT_EQ(v(1), 2.);
+  };
+  auto b = prog.AddVisualizationCallback(my_callback, x);
+  // Programs with visualization call backs are not thread safe.
+  EXPECT_FALSE(prog.IsThreadSafe());
 }
 }  // namespace test
 }  // namespace solvers

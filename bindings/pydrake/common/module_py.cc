@@ -14,10 +14,12 @@
 #include "drake/common/drake_assertion_error.h"
 #include "drake/common/drake_path.h"
 #include "drake/common/find_resource.h"
+#include "drake/common/memory_file.h"
 #include "drake/common/nice_type_name.h"
 #include "drake/common/nice_type_name_override.h"
 #include "drake/common/parallelism.h"
 #include "drake/common/random.h"
+#include "drake/common/sha256.h"
 #include "drake/common/temp_directory.h"
 #include "drake/common/text_logging.h"
 
@@ -116,8 +118,6 @@ void InitLowLevelModules(py::module m) {
   internal::MaybeRedirectPythonLogging();
   m.def("_use_native_cpp_logging", &internal::UseNativeCppLogging);
 
-  ExecuteExtraPythonCode(m, true);
-
   {
     using Class = Parallelism;
     constexpr auto& cls_doc = doc.Parallelism;
@@ -132,9 +132,72 @@ void InitLowLevelModules(py::module m) {
         // Note that we can't bind Parallelism::None(), because `None`
         // is a reserved word in Python.
         .def_static("Max", &Class::Max, cls_doc.Max.doc)
-        .def("num_threads", &Class::num_threads, cls_doc.num_threads.doc);
+        .def("num_threads", &Class::num_threads, cls_doc.num_threads.doc)
+        .def("__repr__", [](const Class& self) {
+          const int num_threads = self.num_threads();
+          return fmt::format("Parallelism(num_threads={})", num_threads);
+        });
     DefCopyAndDeepCopy(&cls);
   }
+
+  {
+    using Class = Sha256;
+    constexpr auto& cls_doc = doc.Sha256;
+    py::class_<Class> cls(m, "Sha256", cls_doc.doc);
+    cls  // BR
+        .def(py::init<>(), cls_doc.ctor.doc)
+        .def_static("Checksum",
+            py::overload_cast<std::string_view>(&Class::Checksum),
+            cls_doc.Checksum.doc_1args_data)
+        .def_static("Parse", &Class::Parse, cls_doc.Parse.doc)
+        .def("to_string", &Class::to_string, cls_doc.to_string.doc)
+        .def(py::self == py::self)
+        .def(py::self != py::self)
+        .def(py::self < py::self)
+        .def(py::pickle([](const Sha256& self) { return self.to_string(); },
+            [](const std::string& ascii_hash) {
+              std::optional<Sha256> sha_maybe = Sha256::Parse(ascii_hash);
+              DRAKE_THROW_UNLESS(sha_maybe.has_value());
+              return *sha_maybe;
+            }));
+    DefCopyAndDeepCopy(&cls);
+  }
+
+  {
+    using Class = MemoryFile;
+    constexpr auto& cls_doc = doc.MemoryFile;
+    py::class_<Class> cls(m, "MemoryFile", cls_doc.doc);
+    py::object ctor = m.attr("MemoryFile");
+    cls  // BR
+        .def(py::init<>(), cls_doc.ctor.doc_0args)
+        .def(py::init<std::string, std::string, std::string>(),
+            py::arg("contents"), py::arg("extension"), py::arg("filename_hint"),
+            cls_doc.ctor.doc_3args)
+        .def(
+            "contents",
+            [](const Class& self) { return py::bytes(self.contents()); },
+            cls_doc.contents.doc)
+        .def("extension", &Class::extension, py_rvp::reference_internal,
+            cls_doc.extension.doc)
+        .def("sha256", &Class::sha256, py_rvp::reference_internal,
+            cls_doc.sha256.doc)
+        .def("filename_hint", &Class::filename_hint, py_rvp::reference_internal,
+            cls_doc.filename_hint.doc)
+        .def_static("Make", &Class::Make, py::arg("path"), cls_doc.Make.doc)
+        .def(py::pickle(
+            [](const MemoryFile& self) {
+              return py::dict(py::arg("contents") = self.contents(),
+                  py::arg("extension") = self.extension(),
+                  py::arg("filename_hint") = self.filename_hint());
+            },
+            [ctor](const py::dict& kwargs) {
+              return ctor(**kwargs).cast<MemoryFile>();
+            }));
+    // Note: __repr__ is defined in _common_extra.py.
+    DefCopyAndDeepCopy(&cls);
+  }
+
+  ExecuteExtraPythonCode(m, true);
 
   py::enum_<drake::ToleranceType>(m, "ToleranceType", doc.ToleranceType.doc)
       .value("kAbsolute", drake::ToleranceType::kAbsolute,

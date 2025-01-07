@@ -1,16 +1,16 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 load("//tools/install:install.bzl", "install")
+load(
+    "//tools/skylark:drake_py.bzl",
+    "drake_py_library",
+    "drake_py_unittest",
+)
 load(
     "//tools/skylark:pybind.bzl",
     "drake_pybind_library",
     "get_drake_py_installs",
     "get_pybind_package_info",
 )
-load(
-    "//tools/skylark:drake_py.bzl",
-    "drake_py_library",
-    "drake_py_unittest",
-)
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 
 package(default_visibility = [
     "//bindings/pydrake:__subpackages__",
@@ -25,7 +25,9 @@ drake_pybind_library(
     cc_deps = [
         "//bindings/pydrake:documentation_pybind",
         "//bindings/pydrake/common:eigen_pybind",
+        "//bindings/pydrake/common:ref_cycle_pybind",
         "//bindings/pydrake/common:serialize_pybind",
+        "//bindings/pydrake/systems:builder_life_support_pybind",
     ],
     cc_so_name = "__init__",
     cc_srcs = [
@@ -37,7 +39,9 @@ drake_pybind_library(
     ],
     package_info = PACKAGE_INFO,
     py_deps = [
+        "//bindings/pydrake/multibody:parsing_py",
         "//bindings/pydrake/systems:framework_py",
+        "//bindings/pydrake/systems:primitives_py",
     ],
     py_srcs = [
         "_manipulation_extra.py",
@@ -47,13 +51,14 @@ drake_pybind_library(
 drake_py_unittest(
     name = "kuka_iiwa_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
         "//manipulation/util:test_directives",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":manipulation",
         "//bindings/pydrake/multibody",
         "//bindings/pydrake/systems",
+        "//bindings/pydrake/systems:test_util_py",
     ],
 )
 

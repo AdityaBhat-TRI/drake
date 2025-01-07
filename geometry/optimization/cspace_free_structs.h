@@ -31,6 +31,11 @@ struct PlaneSeparatesGeometries {
         negative_side_rationals{std::move(m_negative_side_rationals)},
         plane_index{m_plane_index} {}
 
+  // Copyable but not copy-assignable.
+  PlaneSeparatesGeometries(const PlaneSeparatesGeometries&) = default;
+
+  ~PlaneSeparatesGeometries();
+
   const std::vector<symbolic::RationalFunction>& rationals(
       PlaneSide plane_side) const {
     return plane_side == PlaneSide::kPositive ? positive_side_rationals
@@ -38,14 +43,13 @@ struct PlaneSeparatesGeometries {
   }
   const std::vector<symbolic::RationalFunction> positive_side_rationals;
   const std::vector<symbolic::RationalFunction> negative_side_rationals;
-  int plane_index{-1};
+  const int plane_index;
 };
 
 struct FindSeparationCertificateOptions {
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(FindSeparationCertificateOptions)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(FindSeparationCertificateOptions);
   FindSeparationCertificateOptions() = default;
-
-  virtual ~FindSeparationCertificateOptions() = default;
+  virtual ~FindSeparationCertificateOptions();
 
   // We can find the certificate for each pair of geometries in parallel.
   // This allows limiting how many threads will be used for that operation.
@@ -74,8 +78,8 @@ struct FindSeparationCertificateOptions {
  separating_planes()[plane_index] in the C-space region.
  */
 struct SeparationCertificateResultBase {
-  SeparationCertificateResultBase() {}
-  virtual ~SeparationCertificateResultBase() = default;
+  SeparationCertificateResultBase() = default;
+  virtual ~SeparationCertificateResultBase();
 
   int plane_index{-1};
   /** The separating plane is { x | aᵀx+b=0 } */
@@ -92,24 +96,24 @@ struct SeparationCertificateResultBase {
   // We put the copy/move/assignment constructors as protected to avoid copy
   // slicing. The inherited final subclasses should put them in public
   // functions.
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateResultBase)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateResultBase);
 };
 
 struct SeparationCertificateProgramBase {
-  SeparationCertificateProgramBase()
-      : prog{new solvers::MathematicalProgram()} {}
+  SeparationCertificateProgramBase() = default;
+  virtual ~SeparationCertificateProgramBase();
 
-  virtual ~SeparationCertificateProgramBase() = default;
   /// The program that stores all the constraints to search for the separating
   /// plane and Lagrangian multipliers as certificate.
-  copyable_unique_ptr<solvers::MathematicalProgram> prog;
+  copyable_unique_ptr<solvers::MathematicalProgram> prog{
+      std::make_unique<solvers::MathematicalProgram>()};
   int plane_index{-1};
 
  protected:
   // We put the copy/move/assignment constructors as protected to avoid copy
   // slicing. The inherited final subclasses should put them in public
   // functions.
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateProgramBase)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateProgramBase);
 };
 
 }  // namespace optimization

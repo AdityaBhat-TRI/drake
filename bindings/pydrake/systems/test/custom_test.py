@@ -9,6 +9,7 @@ import warnings
 import numpy as np
 
 from pydrake.autodiffutils import AutoDiffXd
+from pydrake.common.test_utilities.deprecation import catch_drake_warnings
 from pydrake.common.value import Value
 from pydrake.symbolic import Expression
 from pydrake.systems.analysis import (
@@ -98,7 +99,7 @@ class CustomVectorSystem(VectorSystem):
         # VectorSystem only supports pure Continuous or pure Discrete.
         # Dimensions:
         #   1 Input, 2 States, 3 Outputs.
-        VectorSystem.__init__(self, 1, 3)
+        VectorSystem.__init__(self, 1, 3, direct_feedthrough=True)
         self._is_discrete = is_discrete
         if self._is_discrete:
             self.DeclareDiscreteState(2)
@@ -670,6 +671,14 @@ class TestCustom(unittest.TestCase):
         self.assertFalse(system.called_guard)
         self.assertFalse(system.called_reset)
         self.assertFalse(system.called_system_reset)
+
+        # Test ExecuteForcedEvents.
+        system = TrivialSystem()
+        context = system.CreateDefaultContext()
+        system.ExecuteForcedEvents(context=context, publish=True)
+        self.assertTrue(system.called_forced_publish)
+        self.assertTrue(system.called_forced_discrete)
+        self.assertTrue(system.called_forced_unrestricted)
 
         # Test witness function error messages.
         system = TrivialSystem()

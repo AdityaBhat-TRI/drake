@@ -22,11 +22,12 @@
 #include "drake/geometry/proximity/distance_to_point_callback.h"
 #include "drake/geometry/proximity/distance_to_shape_callback.h"
 #include "drake/geometry/proximity/find_collision_candidates_callback.h"
-#include "drake/geometry/proximity/hydroelastic_callback.h"
+#include "drake/geometry/proximity/hydroelastic_calculator.h"
 #include "drake/geometry/proximity/hydroelastic_internal.h"
 #include "drake/geometry/proximity/make_mesh_from_vtk.h"
 #include "drake/geometry/proximity/obj_to_surface_mesh.h"
 #include "drake/geometry/proximity/penetration_as_point_pair_callback.h"
+#include "drake/geometry/proximity/polygon_to_triangle_mesh.h"
 #include "drake/geometry/proximity/volume_to_surface_mesh.h"
 #include "drake/geometry/proximity/vtk_to_volume_mesh.h"
 #include "drake/geometry/read_obj.h"
@@ -117,14 +118,31 @@ shared_ptr<fcl::ShapeBased> CopyShapeOrThrow(
 
 // Helper function that creates a *deep* copy of the given collision object.
 unique_ptr<CollisionObjectd> CopyFclObjectOrThrow(
-    const CollisionObjectd& object) {
-  shared_ptr<fcl::ShapeBased> geometry_copy =
-      CopyShapeOrThrow(*object.collisionGeometry());
-  auto copy = make_unique<CollisionObjectd>(geometry_copy);
-  copy->setUserData(object.getUserData());
-  copy->setTransform(object.getTransform());
-  copy->computeAABB();
-  return copy;
+    const CollisionObjectd& object_source) {
+  const auto& shape_source = *object_source.collisionGeometry();
+
+  shared_ptr<fcl::ShapeBased> shape_copy = CopyShapeOrThrow(shape_source);
+
+  // A copy of the geometry is passed to FCL, but CollisionObject's constructor
+  // resets that copy's local bounding box to fit the _instantiated_ shape. So
+  // we retain a pointer to the shape copy long enough after handing it off to
+  // FCL to fix it back up to its original AABB.
+  auto object_copy = make_unique<CollisionObjectd>(shape_copy);
+
+  // The source's local AABB may have been inflated if the underlying object is
+  // associated with a compliant hydroelastic shape with a non-zero margin;
+  // therefore the AABB that fits the shape may not be what we want. We can't
+  // tell simply by looking at the fcl object if this is the case, so, we'll
+  // simply copy the source's local AABB verbatim to preserve the effect.
+  shape_copy->aabb_local.min_ = shape_source.aabb_local.min_;
+  shape_copy->aabb_local.max_ = shape_source.aabb_local.max_;
+  shape_copy->aabb_radius = shape_source.aabb_radius;
+
+  object_copy->setUserData(object_source.getUserData());
+  object_copy->setTransform(object_source.getTransform());
+  object_copy->computeAABB();
+
+  return object_copy;
 }
 
 // Helper function that creates a deep copy of a vector of collision objects.
@@ -168,6 +186,7 @@ struct ReifyData {
   const GeometryId id;
   const ProximityProperties& properties;
   const RigidTransformd X_WG;
+  const double margin;
 };
 
 // Helper functions to facilitate exercising FCL's broadphase code. FCL has
@@ -191,20 +210,63 @@ void FclDistance(const fcl::DynamicAABBTreeCollisionManager<double>& tree1,
                  data, callback);
 }
 
-// Compare function to use with ordering PenetrationAsPointPairs.
+// Compare functions to use with ordering PenetrationAsPointPairs.
 template <typename T>
-bool OrderPointPair(const PenetrationAsPointPair<T>& p1,
-                    const PenetrationAsPointPair<T>& p2) {
-  if (p1.id_A != p2.id_A) return p1.id_A < p2.id_A;
-  return p1.id_B < p2.id_B;
+bool Order(const PenetrationAsPointPair<T>& p1,
+           const PenetrationAsPointPair<T>& p2) {
+  return std::tie(p1.id_A, p1.id_B) < std::tie(p2.id_A, p2.id_B);
 }
 
 // Compare function to use with ordering ContactSurfaces.
 template <typename T>
-bool OrderContactSurface(const ContactSurface<T>& s1,
-                         const ContactSurface<T>& s2) {
-  if (s1.id_M() != s2.id_M()) return s1.id_M() < s2.id_M();
-  return s1.id_N() < s2.id_N();
+bool Order(const ContactSurface<T>& s1, const ContactSurface<T>& s2) {
+  return std::forward_as_tuple(s1.id_M(), s1.id_N()) <
+         std::forward_as_tuple(s2.id_M(), s2.id_N());
+}
+
+// Compare function to use when ordering
+// ComputeSignedDistancePairwiseClosestPoints.
+template <typename T>
+bool OrderSignedDistancePair(const SignedDistancePair<T>& p1,
+                             const SignedDistancePair<T>& p2) {
+  return std::tie(p1.id_A, p1.id_B) < std::tie(p2.id_A, p2.id_B);
+}
+
+// Compare function to use when ordering ComputeSignedDistanceToPoint.
+template <typename T>
+bool OrderSignedDistanceToPoint(const SignedDistanceToPoint<T>& p1,
+                                const SignedDistanceToPoint<T>& p2) {
+  return p1.id_G < p2.id_G;
+}
+
+// @returns true iff `vector` is sorted, by a free function called `Order()`.
+template <typename V>
+bool IsSortedByOrder(V vector) {
+  return std::is_sorted(vector.begin(), vector.end(),
+                        [](const auto& a, const auto& b) {
+                          return Order(a, b);
+                        });
+}
+
+// Finds the dereferenced type of a type that can do dereference: pointers,
+// smart pointers, std::optional, etc.
+template <typename X>
+struct dereferenced {
+  using type = typename std::remove_cvref<decltype(*std::declval<X&>())>::type;
+};
+
+// For a vector of `maybes` (std::optional or various pointer types will work),
+// moves the dereferenced objects to `objects`, ignoring any nullish
+// entries. The order of the moved entries is preserved.  Type X must provide a
+// bool conversion operator, and a dereference operator.
+template <typename X, typename R = typename dereferenced<X>::type>
+void CullFlatten(std::vector<X>* maybes, std::vector<R>* objects) {
+  objects->reserve(maybes->size());
+  for (auto& maybe : *maybes) {
+    if (maybe) {
+      objects->push_back(std::move(*maybe));
+    }
+  }
 }
 
 }  // namespace
@@ -221,6 +283,7 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     hydroelastic_geometries_ = other.hydroelastic_geometries_;
     geometries_for_deformable_contact_ =
         other.geometries_for_deformable_contact_;
+    mesh_sdf_data_ = other.mesh_sdf_data_;
     dynamic_tree_.clear();
     dynamic_objects_.clear();
     anchored_tree_.clear();
@@ -269,6 +332,7 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     engine->hydroelastic_geometries_ = this->hydroelastic_geometries_;
     engine->geometries_for_deformable_contact_ =
         this->geometries_for_deformable_contact_;
+    engine->mesh_sdf_data_ = this->mesh_sdf_data_;
     engine->distance_tolerance_ = this->distance_tolerance_;
 
     return engine;
@@ -309,6 +373,39 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
             geometry.shape().type_name() == "Convex");
   }
 
+  // Updates the local AABB of the underlying FCL object associated with
+  // geometry.
+  // Only for non-deformable geometries that are compliant hydroelastic.
+  // No-op for all other cases.
+  void MaybeUpdateFclLocalAabbWithMargin(const InternalGeometry& geometry,
+                                         const ProximityProperties& props) {
+    if (!IsRegisteredAsRigid(geometry.id()) ||
+        hydroelastic_geometries_.hydroelastic_type(geometry.id()) !=
+            HydroelasticType::kCompliant) {
+      return;
+    }
+
+    const double margin =
+        props.GetPropertyOrDefault<double>(kHydroGroup, kMargin, 0.0);
+
+    if (margin == 0) return;  // nothing to update.
+
+    CollisionObjectd* object = geometry.is_dynamic()
+                                   ? dynamic_objects_[geometry.id()].get()
+                                   : anchored_objects_[geometry.id()].get();
+    DRAKE_DEMAND(object != nullptr);
+
+    InflateAabbForHydroelasticTypesOnly(geometry.shape(), geometry.id(), margin,
+                                        object);
+
+    // If this led to a change in the collision object's AABB, we need to
+    // propagate those changes up through the tree's BVH. The surest way to do
+    // that is to explicitly update.
+    FclDynamicAABBTreeCollisionManager& tree =
+        geometry.is_dynamic() ? dynamic_tree_ : anchored_tree_;
+    tree.update();
+  }
+
   void UpdateRepresentationForNewProperties(
       const InternalGeometry& geometry,
       const ProximityProperties& new_properties) {
@@ -345,13 +442,16 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     geometries_for_deformable_contact_.RemoveGeometry(id);
     geometries_for_deformable_contact_.MaybeAddRigidGeometry(
         geometry.shape(), id, new_properties, X_WG);
+
+    // We must also update the FCL representation in case margin was updated.
+    MaybeUpdateFclLocalAabbWithMargin(geometry, new_properties);
   }
 
   // Returns true if the geometry with the given Id has been registered in
   // `this` ProximityEngine as a deformable geometry (via
   // "AddDeformableGeometry()") and has not been since removed (via
   // "RemoveDeformableGeometry()").
-  bool IsRegisteredAsDeformable(GeometryId id) {
+  bool IsRegisteredAsDeformable(GeometryId id) const {
     return geometries_for_deformable_contact_.is_deformable(id);
   }
 
@@ -359,7 +459,7 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
   // `this` ProximityEngine as a rigid (non-deformable) geometry (via
   // "AddDynamicGeometry() or AddAnchoredGeometry()") and has not been since
   // removed (via "RemoveGeometry()").
-  bool IsRegisteredAsRigid(GeometryId id) {
+  bool IsRegisteredAsRigid(GeometryId id) const {
     return dynamic_objects_.contains(id) || anchored_objects_.contains(id);
   }
 
@@ -372,6 +472,7 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     }
     hydroelastic_geometries_.RemoveGeometry(id);
     geometries_for_deformable_contact_.RemoveGeometry(id);
+    mesh_sdf_data_.erase(id);
   }
 
   void RemoveDeformableGeometry(GeometryId id) {
@@ -433,6 +534,10 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
   void ProcessHydroelastic(const Shape& shape, void* user_data) {
     const ReifyData& data = *static_cast<ReifyData*>(user_data);
     hydroelastic_geometries_.MaybeAddGeometry(shape, data.id, data.properties);
+    if (data.margin > 0 && hydroelastic_geometries_.hydroelastic_type(
+                               data.id) == HydroelasticType::kCompliant) {
+      InflateAabbForHydroelasticTypesOnly(shape, data);
+    }
   }
 
   // Attempts to process the declared geometry into a rigid representation for
@@ -466,37 +571,9 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
   // obj file or a tetrahedral mesh in vtk file, from which we extract its
   // surface.
   void ImplementGeometry(const Convex& convex, void* user_data) override {
-    shared_ptr<const std::vector<Vector3d>> shared_verts;
-    shared_ptr<std::vector<int>> shared_faces;
-    int num_faces{0};
-    if (convex.extension() == ".obj") {
-      // Don't bother triangulating; Convex supports polygons.
-      std::tie(shared_verts, shared_faces, num_faces) = ReadObjFile(
-          convex.filename(), convex.scale(), false /* triangulate */);
-    } else if (convex.extension() == ".vtk") {
-      auto surface_mesh =
-          ConvertVolumeToSurfaceMesh(ReadVtkToVolumeMesh(convex.filename()));
-      shared_verts =
-          make_shared<const std::vector<Vector3d>>(surface_mesh.vertices());
-      shared_faces = make_shared<std::vector<int>>();
-    } else {
-      throw std::runtime_error(fmt::format(
-          "ProximityEngine: Convex shapes only support .obj or .vtk files;"
-          " got ({}) instead.",
-          convex.filename()));
-    }
-    // Create fcl::Convex.
-    auto fcl_convex =
-        make_shared<fcl::Convexd>(shared_verts, num_faces, shared_faces);
-
-    TakeShapeOwnership(fcl_convex, user_data);
-    ProcessHydroelastic(convex, user_data);
-    ProcessGeometriesForDeformableContact(convex, user_data);
-
-    // TODO(DamrongGuoy): Per f2f with SeanCurtis-TRI, we want ProximityEngine
-    // to own vertices and face by a map from filename.  This way we won't have
-    // to read the same file again and again when we create multiple Convex
-    // objects from the same file.
+    ImplementFromConvexHull(convex, user_data);
+    // Set up data for ComputeSignedDistanceToPoint() from convex meshes.
+    ImplementMeshSdfData(convex, user_data);
   }
 
   void ImplementGeometry(const Cylinder& cylinder, void* user_data) override {
@@ -527,62 +604,10 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
   }
 
   void ImplementGeometry(const Mesh& mesh, void* user_data) override {
-    const ReifyData& data = *static_cast<ReifyData*>(user_data);
-    const HydroelasticType type = data.properties.GetPropertyOrDefault(
-        kHydroGroup, kComplianceType, HydroelasticType::kUndefined);
-
-    // We process hydroelastic geometry first, so we have access to mesh
-    // vertices that we will pass to FCL later without reading the mesh
-    // file again.
-    ProcessHydroelastic(mesh, user_data);
-    shared_ptr<const std::vector<Vector3d>> shared_verts;
-    if (type == HydroelasticType::kSoft) {
-      shared_verts = make_shared<const std::vector<Vector3d>>(
-          ConvertVolumeToSurfaceMesh(
-              hydroelastic_geometries_.soft_geometry(data.id).mesh())
-              .vertices());
-    } else if (type == HydroelasticType::kRigid) {
-      shared_verts = make_shared<const std::vector<Vector3d>>(
-          hydroelastic_geometries_.rigid_geometry(data.id).mesh().vertices());
-    } else {
-      if (mesh.extension() == ".vtk") {
-        // TODO(rpoyner-tri): could take convex hull here.
-        shared_verts = make_shared<const std::vector<Vector3d>>(
-            ConvertVolumeToSurfaceMesh(ReadVtkToVolumeMesh(mesh.filename()))
-                .vertices());
-      } else if (mesh.extension() == ".obj") {
-        // Don't bother triangulating; we're ignoring the faces.
-        std::tie(shared_verts, std::ignore, std::ignore) =
-            ReadObjFile(mesh.filename(), mesh.scale(), false /* triangulate */);
-      } else {
-        // TODO(SeanCurtis-TRI) Add a troubleshooting entry to give more
-        //  helpful advice.
-        throw std::runtime_error(fmt::format(
-            "ProximityEngine: Mesh shapes for non-hydroelastic "
-            "contact only support .obj or .vtk files; got ({}) instead.",
-            mesh.filename()));
-      }
-    }
-
-    // Note: the strategy here is to use an *invalid* fcl::Convex shape for the
-    // mesh. A minimum condition for "invalid" is that the convex specification
-    // contains vertices that are not referenced by a face. Passing zero faces
-    // will accomplish that. GJK asks Convex for a "supporting vertex" in a
-    // particular direction. "Invalid" Convex instances find that vertex by
-    // doing a linear search through all vertices. "Valid" looking instances
-    // walk around an explicitly defined convex hull. We can't easily create a
-    // valid convex hull, so we create an obviously invalid one to force FCL to
-    // search all vertices as a guarantee for correctness.
-    auto fcl_convex = make_shared<fcl::Convexd>(
-        shared_verts, 0, make_shared<std::vector<int>>());
-    TakeShapeOwnership(fcl_convex, user_data);
-
-    // TODO(DamrongGuoy):  Right now ProcessGeometriesForDeformableContact()
-    //  will call deformable::Geometries::MaybeAddRigidGeometry(), which will
-    //  add the geometry only when its proximity property has
-    //  (kHydroGroup, kRezHint). We should make exception for Mesh since it
-    //  doesn't need resolution hint.
-    ProcessGeometriesForDeformableContact(mesh, user_data);
+    // We currently represent Mesh shapes with their convex hulls in fcl.
+    ImplementFromConvexHull(mesh, user_data);
+    // Set up data for ComputeSignedDistanceToPoint() from non-convex meshes.
+    ImplementMeshSdfData(mesh, user_data);
   }
 
   void ImplementGeometry(const Sphere& sphere, void* user_data) override {
@@ -612,6 +637,8 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     // anchored against anchored because those pairs are implicitly filtered.
     FclDistance(dynamic_tree_, anchored_tree_, &data,
                 shape_distance::Callback<T>);
+    std::sort(witness_pairs.begin(), witness_pairs.end(),
+              OrderSignedDistancePair<T>);
     return witness_pairs;
   }
 
@@ -667,8 +694,8 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
 
     std::vector<SignedDistanceToPoint<T>> distances;
 
-    point_distance::CallbackData<T> data{&query_point, threshold, p_WQ, &X_WGs,
-                                         &distances};
+    point_distance::CallbackData<T> data{
+        &query_point, threshold, p_WQ, &X_WGs, &mesh_sdf_data_, &distances};
 
     // Perform query of point vs dynamic objects.
     dynamic_tree_.distance(&query_point, &data, point_distance::Callback<T>);
@@ -676,6 +703,8 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     // Perform query of point vs anchored objects.
     anchored_tree_.distance(&query_point, &data, point_distance::Callback<T>);
 
+    std::sort(distances.begin(), distances.end(),
+              OrderSignedDistanceToPoint<T>);
     return distances;
   }
 
@@ -693,7 +722,10 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     FclCollide(dynamic_tree_, anchored_tree_, &data,
                penetration_as_point_pair::Callback<T>);
 
-    std::sort(contacts.begin(), contacts.end(), OrderPointPair<T>);
+    std::sort(contacts.begin(), contacts.end(),
+              [](const auto& a, const auto& b) {
+                return Order<T>(a, b);
+              });
 
     return contacts;
   }
@@ -711,12 +743,7 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     FclCollide(dynamic_tree_, anchored_tree_, &data,
                find_collision_candidates::Callback);
 
-    std::sort(
-        pairs.begin(), pairs.end(),
-        [](const SortedPair<GeometryId>& p1, const SortedPair<GeometryId>& p2) {
-          if (p1.first() != p2.first()) return p1.first() < p2.first();
-          return p1.second() < p2.second();
-        });
+    std::sort(pairs.begin(), pairs.end());
 
     return pairs;
   }
@@ -740,21 +767,28 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
   ComputeContactSurfaces(
       HydroelasticContactRepresentation representation,
       const unordered_map<GeometryId, RigidTransform<T>>& X_WGs) const {
+    std::vector<SortedPair<GeometryId>> candidates = FindCollisionCandidates();
+
     vector<ContactSurface<T>> surfaces;
-    // All these quantities are aliased in the callback data.
-    hydroelastic::CallbackData<T> data{&collision_filter_, &X_WGs,
-                                       &hydroelastic_geometries_,
-                                       representation, &surfaces};
+    // All these quantities are aliased in the calculator.
+    hydroelastic::ContactCalculator<T> calculator{
+        &X_WGs, &hydroelastic_geometries_, representation};
 
-    // Perform a query of the dynamic objects against themselves.
-    dynamic_tree_.collide(&data, hydroelastic::Callback<T>);
-
-    // Perform a query of the dynamic objects against the anchored. We don't do
-    // anchored against anchored because those pairs are implicitly filtered.
-    FclCollide(dynamic_tree_, anchored_tree_, &data, hydroelastic::Callback<T>);
-
-    std::sort(surfaces.begin(), surfaces.end(), OrderContactSurface<T>);
-
+    // As a suggestion to future thread parallelizers, make available a fully
+    // allocated and prepared vector for results of the parallelizable step.
+    vector<std::unique_ptr<ContactSurface<T>>> surface_ptrs(candidates.size());
+    // TODO(rpoyner-tri): try some thread parallelism here.
+    for (int k = 0; k < ssize(candidates); ++k) {
+      const auto& [id0, id1] = candidates[k];
+      auto [result, surface] = calculator.MaybeMakeContactSurface(id0, id1);
+      if (ContactSurfaceFailed(result)) {
+        ThrowOnFailedResult(result, GetFclPtr(id0), GetFclPtr(id1));
+      } else if (surface != nullptr) {
+        surface_ptrs[k] = std::move(surface);
+      }
+    }
+    CullFlatten(&surface_ptrs, &surfaces);
+    DRAKE_ASSERT(IsSortedByOrder(surfaces));
     return surfaces;
   }
 
@@ -768,23 +802,37 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     DRAKE_DEMAND(surfaces != nullptr);
     DRAKE_DEMAND(point_pairs != nullptr);
 
-    // All these quantities are aliased in the callback data.
-    hydroelastic::CallbackWithFallbackData<T> data{
-        hydroelastic::CallbackData<T>{&collision_filter_, &X_WGs,
-                                      &hydroelastic_geometries_, representation,
-                                      surfaces},
-        point_pairs};
+    std::vector<SortedPair<GeometryId>> candidates = FindCollisionCandidates();
 
-    // Dynamic vs dynamic and dynamic vs anchored represent all the geometries
-    // that we can support with the point-pair fallback. Do those first.
-    dynamic_tree_.collide(&data, hydroelastic::CallbackWithFallback<T>);
+    // All these quantities are aliased.
+    hydroelastic::ContactCalculator<T> calculator{
+        &X_WGs, &hydroelastic_geometries_, representation};
+    penetration_as_point_pair::CallbackData<T> point_data{&collision_filter_,
+                                                          &X_WGs, point_pairs};
 
-    FclCollide(dynamic_tree_, anchored_tree_, &data,
-               hydroelastic::CallbackWithFallback<T>);
-
-    std::sort(surfaces->begin(), surfaces->end(), OrderContactSurface<T>);
-
-    std::sort(point_pairs->begin(), point_pairs->end(), OrderPointPair<T>);
+    // As a suggestion to future thread parallelizers, make available fully
+    // allocated and prepared vectors for results of the parallelizable steps.
+    vector<std::unique_ptr<ContactSurface<T>>> surface_ptrs(candidates.size());
+    vector<std::optional<PenetrationAsPointPair<T>>> point_pair_maybes(
+        candidates.size());
+    // TODO(rpoyner-tri): try some thread parallelism here.
+    for (int k = 0; k < ssize(candidates); ++k) {
+      const auto& [id0, id1] = candidates[k];
+      auto [result, surface] = calculator.MaybeMakeContactSurface(id0, id1);
+      if (ContactSurfaceFailed(result)) {
+        auto penetration = penetration_as_point_pair::MaybeMakePointPair(
+            GetFclPtr(id0), GetFclPtr(id1), point_data);
+        if (penetration.has_value()) {
+          point_pair_maybes[k] = penetration;
+        }
+      } else if (surface != nullptr) {
+        surface_ptrs[k] = std::move(surface);
+      }
+    }
+    CullFlatten(&surface_ptrs, surfaces);
+    DRAKE_ASSERT(IsSortedByOrder(*surfaces));
+    CullFlatten(&point_pair_maybes, point_pairs);
+    DRAKE_ASSERT(IsSortedByOrder(*point_pairs));
   }
 
   void ComputeDeformableContact(
@@ -875,18 +923,113 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     return iter->second->getNodeType() == fcl::GEOM_CONVEX;
   }
 
+  void* GetCollisionObject(GeometryId id) const {
+    if (auto iter = dynamic_objects_.find(id); iter != dynamic_objects_.end()) {
+      return iter->second.get();
+    }
+    if (auto iter = anchored_objects_.find(id);
+        iter != anchored_objects_.end()) {
+      return iter->second.get();
+    }
+    return nullptr;
+  }
+
  private:
   // Engine on one scalar can see the members of other engines.
   friend class ProximityEngineTester;
   template <typename>
   friend class ProximityEngine;
 
+  // @returns fully-typed FCL collision object pointer for `id`.
+  // @pre IsRegisteredAsRigid(id) == true
+  CollisionObjectd* GetFclPtr(GeometryId id) const {
+    DRAKE_ASSERT(IsRegisteredAsRigid(id));
+    return static_cast<CollisionObjectd*>(GetCollisionObject(id));
+  }
+
+  // Overload for when the parameters are largely stashed within a ReifyData
+  // instance.
+  void InflateAabbForHydroelasticTypesOnly(const Shape& shape,
+                                           const ReifyData& data) {
+    InflateAabbForHydroelasticTypesOnly(shape, data.id, data.margin,
+                                        data.fcl_object.get());
+  }
+
+  // Inflates the AABB of the collision object and its geometry (in their
+  // respective frames) for compliant hydroelastic geometries only.
+  //
+  // Each fcl::CollisionGeometryd computes an axis-aligned bounding box in the
+  // geometry's frame (its "local AABB") during construction. The hydroelastic
+  // representations are larger than the specified shapes and we want to make
+  // sure that the bounding volumes associated with those hydro geometries
+  // properly enclose them. So, we'll edit fcl's bounding box definition after
+  // the fact to account for the inflation.
+  //
+  // The fcl::CollisionObject likewise has a bounding box based on the
+  // geometry's local AABB and its current pose. We also update the collision
+  // objects AABB.
+  //
+  // Inflation for the primitives' bounding boxes is trivial; each grows twice
+  // `margin` along the canonical frames' axes. Meshes (Mesh and Convex) are
+  // trickier because vertices can move a larger distance than margin, so simply
+  // bumping the box by 2 * margin is insufficient, we need to rebound the
+  // set of vertices.
+  //
+  // @pre `id` has a compliant hydroelastic representation.
+  // @pre `margin` > 0.
+  // @pre `object != nullptr`.
+  void InflateAabbForHydroelasticTypesOnly(const Shape& shape,
+                                           const GeometryId id, double margin,
+                                           fcl::CollisionObjectd* object) {
+    DRAKE_DEMAND(margin > 0);
+    DRAKE_DEMAND(hydroelastic_geometries_.hydroelastic_type(id) ==
+                 HydroelasticType::kCompliant);
+    DRAKE_DEMAND(object != nullptr);
+
+    // To edit the assigned collision geometry, we have to cheat and temporarily
+    // ignore the const-ness. Note: this assumes that the collision object
+    // hasn't been added to a BVH yet; as long as this is part of the
+    // reification process, that will remain true. The collision object only
+    // gets added when reification is complete.
+    auto* g =
+        const_cast<fcl::CollisionGeometryd*>(object->collisionGeometry().get());
+    DRAKE_DEMAND(g != nullptr);
+
+    std::string_view shape_name = shape.type_name();
+    if (shape_name == "Mesh" || shape_name == "Convex") {
+      // Meshes can have their vertices move an arbitrary amount, we simply need
+      // to recompute the bounding box based on the *moved* vertex positions
+      // defined in the hydro mesh.
+      const auto& mesh = hydroelastic_geometries_.soft_geometry(id).mesh();
+      g->aabb_local.min_ =
+          Vector3d::Constant(std::numeric_limits<double>::infinity());
+      g->aabb_local.max_ = -g->aabb_local.min_;
+      for (const auto& v : mesh.vertices()) {
+        g->aabb_local.min_ = g->aabb_local.min_.cwiseMin(v);
+        g->aabb_local.max_ = g->aabb_local.max_.cwiseMax(v);
+      }
+    } else {
+      // To guarantee correct inflation, always start with a tight fitting AABB.
+      g->computeLocalAABB();
+      // Primitives simply grow by margin in each axis direction.
+      g->aabb_local.max_ += Vector3d::Constant(margin);
+      g->aabb_local.min_ -= Vector3d::Constant(margin);
+    }
+    // Changes to the local AABB also require updating the radius of its
+    // circumscribing sphere.
+    g->aabb_radius = (g->aabb_local.min_ - g->aabb_center).norm();
+    // Finally fit the object's AABB.
+    object->computeAABB();
+  }
+
   void AddGeometry(
       const Shape& shape, const RigidTransformd& X_WG, GeometryId id,
       const ProximityProperties& props, bool is_dynamic,
       fcl::DynamicAABBTreeCollisionManager<double>* tree,
       unordered_map<GeometryId, unique_ptr<CollisionObjectd>>* objects) {
-    ReifyData data{nullptr, id, props, X_WG};
+    const double margin =
+        props.GetPropertyOrDefault<double>(kHydroGroup, kMargin, 0.0);
+    ReifyData data{nullptr, id, props, X_WG, margin};
     shape.Reify(this, &data);
 
     data.fcl_object->setTransform(X_WG.GetAsIsometry3());
@@ -932,6 +1075,120 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     reify_data.fcl_object = make_unique<CollisionObjectd>(shape);
   }
 
+  // Implements the proximity representation of the mesh type (Mesh or Convex)
+  // from its convex hull (rather than from the actual mesh data).
+  template <typename MeshType>
+  void ImplementFromConvexHull(const MeshType& mesh, void* user_data) {
+    // Create fcl::Convex for the fcl bounding volume hierarchy.
+    const PolygonSurfaceMesh<double>& hull = mesh.GetConvexHull();
+    auto shared_verts = make_shared<std::vector<Vector3d>>();
+    for (int vi = 0; vi < hull.num_vertices(); ++vi) {
+      shared_verts->push_back(hull.vertex(vi));
+    }
+    auto shared_faces = make_shared<std::vector<int>>(hull.face_data());
+    auto fcl_convex = make_shared<fcl::Convexd>(
+        std::move(shared_verts), hull.num_elements(), std::move(shared_faces));
+
+    TakeShapeOwnership(fcl_convex, user_data);
+    ProcessHydroelastic(mesh, user_data);
+    // TODO(DamrongGuoy):  Right now ProcessGeometriesForDeformableContact()
+    //  will call deformable::Geometries::MaybeAddRigidGeometry(), which will
+    //  add the geometry only when its proximity property has
+    //  (kHydroGroup, kRezHint). We should make exception for Mesh and Convex
+    //  since they don't need resolution hint.
+    ProcessGeometriesForDeformableContact(mesh, user_data);
+  }
+
+  // TODO(DamrongGuoy): If setting up mesh_sdf_data_ turns out to be too
+  //  expensive during initialization, defer its computation to the time when
+  //  users call ComputeSignedDistanceToPoint(). The deferred computation
+  //  will need to be thread-safe.
+
+  // Populate the proximity representation of Mesh for
+  // ComputeSignedDistanceToPoint. It could be .vtk tetrahedral mesh or
+  // .obj triangle mesh.
+  void ImplementMeshSdfData(const Mesh& mesh, void* user_data) {
+    const ReifyData& data = *static_cast<ReifyData*>(user_data);
+    if (mesh.extension() == ".vtk") {
+      // Assume the .vtk file is a tetrahedral mesh.  If that's not true,
+      // we'll get an error.
+      VolumeMesh<double> volume_mesh = MakeVolumeMeshFromVtk<double>(mesh);
+      mesh_sdf_data_.emplace(data.id, MeshDistanceBoundary(volume_mesh));
+    } else if (mesh.extension() == ".obj") {
+      mesh_sdf_data_.emplace(data.id,
+                             MeshDistanceBoundary(ReadObjToTriangleSurfaceMesh(
+                                 mesh.source(), mesh.scale())));
+    }
+    // Meshes are unsupported if we cannot compute a MeshDistanceBoundary.
+    // point_distance::Callback() skips every Mesh that doesn't have an entry
+    // in mesh_sdf_data_.
+  }
+
+  // Populate the proximity representation of Convex for
+  // ComputeSignedDistanceToPoint.
+  void ImplementMeshSdfData(const Convex& convex, void* user_data) {
+    const PolygonSurfaceMesh<double>& hull = convex.GetConvexHull();
+    const ReifyData& data = *static_cast<ReifyData*>(user_data);
+    mesh_sdf_data_.emplace(
+        data.id, MeshDistanceBoundary(MakeTriangleFromPolygonMesh(hull)));
+  }
+
+  /* @throws a std::exception with an appropriate error message for the various
+     result codes that indicate failure.
+     @pre ContactSurfaceFailed(result) == true */
+  [[noreturn]] void ThrowOnFailedResult(
+      hydroelastic::ContactSurfaceResult result,
+      fcl::CollisionObjectd* object_A_ptr,
+      fcl::CollisionObjectd* object_B_ptr) const {
+    // Give a slightly better diagnostic for a misplaced happy result code.
+    DRAKE_DEMAND(hydroelastic::ContactSurfaceFailed(result));
+    const EncodedData encoding_a(*object_A_ptr);
+    const EncodedData encoding_b(*object_B_ptr);
+
+    const HydroelasticType type_A =
+        hydroelastic_geometries_.hydroelastic_type(encoding_a.id());
+    const HydroelasticType type_B =
+        hydroelastic_geometries_.hydroelastic_type(encoding_b.id());
+
+    using enum hydroelastic::ContactSurfaceResult;
+    switch (result) {
+      case kUnsupported:
+        throw std::logic_error(fmt::format(
+            "Requested a contact surface between a pair of geometries without "
+            "hydroelastic representation for at least one shape: a {} {} with "
+            "id {} and a {} {} with id {}",
+            type_A, GetGeometryName(*object_A_ptr), encoding_a.id(), type_B,
+            GetGeometryName(*object_B_ptr), encoding_b.id()));
+      case kRigidRigid:
+        throw std::logic_error(fmt::format(
+            "Requested contact between two rigid objects ({} with id "
+            "{}, {} with id {}); that is not allowed in hydroelastic-only "
+            "contact. Please consider using hydroelastics with point-contact "
+            "fallback, e.g., QueryObject::ComputeContactSurfacesWithFallback() "
+            "or MultibodyPlant::set_contact_model("
+            "ContactModel::kHydroelasticWithFallback)",
+            GetGeometryName(*object_A_ptr), encoding_a.id(),
+            GetGeometryName(*object_B_ptr), encoding_b.id()));
+      case kCompliantHalfSpaceCompliantMesh:
+        throw std::logic_error(fmt::format(
+            "Requested hydroelastic contact between two compliant geometries, "
+            "one of which is a half space ({} with id {}, {} with id {}); "
+            "that is not allowed",
+            GetGeometryName(*object_A_ptr), encoding_a.id(),
+            GetGeometryName(*object_B_ptr), encoding_b.id()));
+      case kHalfSpaceHalfSpace:
+        throw std::logic_error(fmt::format(
+            "Requested contact between two half spaces with ids {} and {}; "
+            "that is not allowed",
+            encoding_a.id(), encoding_b.id()));
+      case kCalculated:
+        // This should never happen (see DRAKE_DEMAND()) above), but is here
+        // for compiler switch code completeness checking.
+        DRAKE_UNREACHABLE();
+    }
+    DRAKE_UNREACHABLE();
+  }
+
   // The BVH of all dynamic geometries; this depends on *all* inputs.
   // TODO(SeanCurtis-TRI): Ultimately, this should probably be a cache entry.
   FclDynamicAABBTreeCollisionManager dynamic_tree_;
@@ -962,6 +1219,9 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
   // The deformable geometries registered here are not included in
   // `dynamic_objects_` and `dynamic_tree_`.
   deformable::Geometries geometries_for_deformable_contact_;
+
+  // Data for ComputeSignedDistanceToPoint from meshes (Mesh and Convex).
+  std::unordered_map<GeometryId, MeshDistanceBoundary> mesh_sdf_data_{};
 };
 
 template <typename T>
@@ -1203,12 +1463,17 @@ bool ProximityEngine<T>::IsFclConvexType(GeometryId id) const {
   return impl_->IsFclConvexType(id);
 }
 
+template <typename T>
+void* ProximityEngine<T>::GetCollisionObject(GeometryId id) const {
+  return impl_->GetCollisionObject(id);
+}
+
 DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    (&ProximityEngine<T>::template ToScalarType<U>))
+    (&ProximityEngine<T>::template ToScalarType<U>));
 
 DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
     (&ProximityEngine<T>::template ComputeContactSurfaces<T>,
-     &ProximityEngine<T>::template ComputeContactSurfacesWithFallback<T>))
+     &ProximityEngine<T>::template ComputeContactSurfacesWithFallback<T>));
 
 template void ProximityEngine<double>::ComputeDeformableContact<double>(
     DeformableContact<double>*) const;
@@ -1218,4 +1483,4 @@ template void ProximityEngine<double>::ComputeDeformableContact<double>(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::geometry::internal::ProximityEngine)
+    class ::drake::geometry::internal::ProximityEngine);

@@ -43,7 +43,7 @@ are indexed using a SubsystemIndex; there is no separate SubcontextIndex since
 the numbering must be identical. */
 class SystemBase : public internal::SystemMessageInterface {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SystemBase)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SystemBase);
 
   ~SystemBase() override;
 
@@ -1091,20 +1091,21 @@ class SystemBase : public internal::SystemMessageInterface {
     return next_available_ticket_++;
   }
 
+  /** (Internal use only) Checks if a ticket depends on (any) input port. When
+  this returns "true" the ticket MUST NOT depend on input. When this returns
+  "false", it just means that we're not sure. This is intended to be an
+  inexpensive check, withough searching the entire graph. */
+  bool IsObviouslyNotInputDependent(DependencyTicket dependency_ticket) const;
+
   /** (Internal use only) Declares that `parent_service` is the service
-  interface of the Diagram that owns this subsystem. Aborts if the parent
-  service has already been set to something else. */
+  interface of the Diagram that owns this subsystem. Throws if the parent
+  service has already been set. */
   // Use static method so Diagram can invoke this on behalf of a child.
   // Output argument is listed first because it is serving as the 'this'
   // pointer here.
   static void set_parent_service(
       SystemBase* child,
-      const internal::SystemParentServiceInterface* parent_service) {
-    DRAKE_DEMAND(child != nullptr && parent_service != nullptr);
-    DRAKE_DEMAND(child->parent_service_ == nullptr ||
-                 child->parent_service_ == parent_service);
-    child->parent_service_ = parent_service;
-  }
+      const internal::SystemParentServiceInterface* parent_service);
 
   /** (Internal use only) Given a `port_index`, returns a function to be called
   when validating Context::FixInputPort requests. The function should attempt
@@ -1442,7 +1443,7 @@ namespace internal {
 // other than itself.
 class DiagramSystemBaseAttorney {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiagramSystemBaseAttorney)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiagramSystemBaseAttorney);
   DiagramSystemBaseAttorney() = delete;
 
  private:

@@ -4,11 +4,14 @@
  pydrake.geometry module. */
 
 #include "drake/bindings/pydrake/common/default_scalars_pybind.h"
+#include "drake/bindings/pydrake/common/serialize_pybind.h"
 #include "drake/bindings/pydrake/common/type_pack.h"
 #include "drake/bindings/pydrake/common/value_pybind.h"
 #include "drake/bindings/pydrake/documentation_pybind.h"
+#include "drake/bindings/pydrake/geometry/geometry_py.h"
 #include "drake/geometry/geometry_frame.h"
 #include "drake/geometry/scene_graph.h"
+#include "drake/geometry/scene_graph_config.h"
 
 namespace drake {
 namespace pydrake {
@@ -17,12 +20,14 @@ namespace {
 using systems::Context;
 using systems::LeafSystem;
 
+// NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
+using namespace drake::geometry;
+constexpr auto& doc = pydrake_doc.drake.geometry;
+
+// TODO(jwnimmer-tri) Reformat this entire file to remove the unnecessary
+// indentation.
+
 void DoScalarIndependentDefinitions(py::module m) {
-  constexpr auto& doc = pydrake_doc.drake.geometry;
-
-  // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
-  using namespace drake::geometry;
-
   // HydroelasticContactRepresentation enumeration
   {
     using Class = HydroelasticContactRepresentation;
@@ -31,16 +36,33 @@ void DoScalarIndependentDefinitions(py::module m) {
         .value("kTriangle", Class::kTriangle, cls_doc.kTriangle.doc)
         .value("kPolygon", Class::kPolygon, cls_doc.kPolygon.doc);
   }
+
+  {
+    using Class = geometry::DefaultProximityProperties;
+    constexpr auto& cls_doc = doc.DefaultProximityProperties;
+    py::class_<Class> cls(m, "DefaultProximityProperties", cls_doc.doc);
+    cls  // BR
+        .def(ParamInit<Class>());
+    DefAttributesUsingSerialize(&cls, cls_doc);
+    DefReprUsingSerialize(&cls);
+    DefCopyAndDeepCopy(&cls);
+  }
+
+  {
+    using Class = geometry::SceneGraphConfig;
+    constexpr auto& cls_doc = doc.SceneGraphConfig;
+    py::class_<Class> cls(m, "SceneGraphConfig", cls_doc.doc);
+    cls  // BR
+        .def(ParamInit<Class>());
+    DefAttributesUsingSerialize(&cls, cls_doc);
+    DefReprUsingSerialize(&cls);
+    DefCopyAndDeepCopy(&cls);
+  }
 }
 
 template <typename T>
-void DoScalarDependentDefinitions(py::module m, T) {
+void DefineSceneGraphInspector(py::module m, T) {
   py::tuple param = GetPyParam<T>();
-  constexpr auto& doc = pydrake_doc.drake.geometry;
-
-  // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
-  using namespace drake::geometry;
-
   //  SceneGraphInspector
   {
     using Class = SceneGraphInspector<T>;
@@ -156,7 +178,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
         .def("geometry_version", &Class::geometry_version,
             py_rvp::reference_internal, cls_doc.geometry_version.doc);
   }
+}
 
+template <typename T>
+void DefineSceneGraph(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   //  SceneGraph
   {
     using Class = SceneGraph<T>;
@@ -164,7 +190,18 @@ void DoScalarDependentDefinitions(py::module m, T) {
     auto cls = DefineTemplateClassWithDefault<Class, LeafSystem<T>>(
         m, "SceneGraph", param, cls_doc.doc);
     cls  // BR
-        .def(py::init<>(), cls_doc.ctor.doc)
+        .def(py::init<>(), cls_doc.ctor.doc_0args)
+        .def(py::init<const SceneGraphConfig&>(), py::arg("config"),
+            cls_doc.ctor.doc_1args)
+        .def("set_config", &Class::set_config, py::arg("config"),
+            cls_doc.set_config.doc)
+        .def("get_config",
+            overload_cast_explicit<const SceneGraphConfig&>(&Class::get_config),
+            py_rvp::reference_internal, cls_doc.get_config.doc_0args)
+        .def("get_config",
+            overload_cast_explicit<const SceneGraphConfig&,
+                const systems::Context<T>&>(&Class::get_config),
+            cls_doc.get_config.doc_1args)
         .def("get_source_pose_port", &Class::get_source_pose_port,
             py_rvp::reference_internal, cls_doc.get_source_pose_port.doc)
         .def("get_source_configuration_port",
@@ -192,20 +229,38 @@ void DoScalarDependentDefinitions(py::module m, T) {
             cls_doc.RegisterFrame.doc_3args)
         .def("RenameFrame", &Class::RenameFrame, py::arg("frame_id"),
             py::arg("name"), cls_doc.RenameFrame.doc)
-        .def("RegisterGeometry",
-            py::overload_cast<SourceId, FrameId,
-                std::unique_ptr<GeometryInstance>>(&Class::RegisterGeometry),
+        .def(
+            "RegisterGeometry",
+            [](Class& self, SourceId source_id, FrameId frame_id,
+                const GeometryInstance& geometry) {
+              // The `geometry` object offers various reference_internal getters
+              // for its attributes, and if we were to try to move the geometry
+              // into the SceneGraph then trying to reason about the validity of
+              // those lingering python references becomes extremely difficult.
+              // Instead, we'll just copy the geometry when adding it.
+              return self.RegisterGeometry(source_id, frame_id,
+                  std::make_unique<GeometryInstance>(geometry));
+            },
             py::arg("source_id"), py::arg("frame_id"), py::arg("geometry"),
             cls_doc.RegisterGeometry.doc_3args)
-        .def("RegisterGeometry",
-            overload_cast_explicit<GeometryId, systems::Context<T>*, SourceId,
-                FrameId, std::unique_ptr<GeometryInstance>>(
-                &Class::RegisterGeometry),
+        .def(
+            "RegisterGeometry",
+            [](Class& self, systems::Context<T>* context, SourceId source_id,
+                FrameId frame_id, const GeometryInstance& geometry) {
+              // Ditto the comment on the other overload, immediately above.
+              return self.RegisterGeometry(context, source_id, frame_id,
+                  std::make_unique<GeometryInstance>(geometry));
+            },
             py::arg("context"), py::arg("source_id"), py::arg("frame_id"),
             py::arg("geometry"), cls_doc.RegisterGeometry.doc_4args)
-        .def("RegisterAnchoredGeometry",
-            py::overload_cast<SourceId, std::unique_ptr<GeometryInstance>>(
-                &Class::RegisterAnchoredGeometry),
+        .def(
+            "RegisterAnchoredGeometry",
+            [](Class& self, SourceId source_id,
+                const GeometryInstance& geometry) {
+              // Ditto the comment on RegisterGeometry, above.
+              return self.RegisterAnchoredGeometry(
+                  source_id, std::make_unique<GeometryInstance>(geometry));
+            },
             py::arg("source_id"), py::arg("geometry"),
             cls_doc.RegisterAnchoredGeometry.doc)
         .def("RenameGeometry", &Class::RenameGeometry, py::arg("geometry_id"),
@@ -386,8 +441,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
         .def_static("world_frame_id", &Class::world_frame_id,
             cls_doc.world_frame_id.doc);
   }
+}
 
-  //  FramePoseVector
+template <typename T>
+void DefineFramePoseVector(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   {
     using Class = FramePoseVector<T>;
     auto cls = DefineTemplateClassWithDefault<Class>(
@@ -412,8 +470,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
         .def("ids", &FramePoseVector<T>::ids, doc.KinematicsVector.ids.doc);
     AddValueInstantiation<FramePoseVector<T>>(m);
   }
+}
 
-  //  QueryObject
+template <typename T>
+void DefineQueryObject(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   {
     using Class = QueryObject<T>;
     constexpr auto& cls_doc = doc.QueryObject;
@@ -516,8 +577,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
 
     AddValueInstantiation<QueryObject<T>>(m);
   }
+}
 
-  // SignedDistancePair
+template <typename T>
+void DefineSignedDistancePair(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   {
     using Class = SignedDistancePair<T>;
     auto cls = DefineTemplateClassWithDefault<Class>(
@@ -540,8 +604,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
             return_value_policy_for_scalar_type<T>(),
             doc.SignedDistancePair.nhat_BA_W.doc);
   }
+}
 
-  // SignedDistanceToPoint
+template <typename T>
+void DefineSignedDistanceToPoint(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   {
     using Class = SignedDistanceToPoint<T>;
     auto cls = DefineTemplateClassWithDefault<Class>(
@@ -559,8 +626,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
             return_value_policy_for_scalar_type<T>(),
             doc.SignedDistanceToPoint.grad_W.doc);
   }
+}
 
-  // PenetrationAsPointPair
+template <typename T>
+void DefinePenetrationAsPointPair(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   {
     using Class = PenetrationAsPointPair<T>;
     auto cls = DefineTemplateClassWithDefault<Class>(
@@ -580,8 +650,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
         .def_readwrite("depth", &PenetrationAsPointPair<T>::depth,
             doc.PenetrationAsPointPair.depth.doc);
   }
+}
 
-  // ContactSurface
+template <typename T>
+void DefineContactSurface(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   // Currently we do not bind the constructor because users do not need to
   // construct it directly yet. We can get it from ComputeContactSurface*().
   if constexpr (scalar_predicate<T>::is_bool) {
@@ -625,13 +698,24 @@ void DoScalarDependentDefinitions(py::module m, T) {
         .def("Equal", &Class::Equal, py::arg("surface"), cls_doc.Equal.doc);
     DefCopyAndDeepCopy(&cls);
   }
-}  // NOLINT(readability/fn_size)
+}
 }  // namespace
 
 void DefineGeometrySceneGraph(py::module m) {
   py::module::import("pydrake.systems.framework");
   DoScalarIndependentDefinitions(m);
-  type_visit([m](auto dummy) { DoScalarDependentDefinitions(m, dummy); },
+  type_visit(
+      [m](auto dummy) {
+        // This list must remain in topological dependency order.
+        DefineFramePoseVector(m, dummy);
+        DefineContactSurface(m, dummy);
+        DefinePenetrationAsPointPair(m, dummy);
+        DefineSignedDistancePair(m, dummy);
+        DefineSignedDistanceToPoint(m, dummy);
+        DefineSceneGraphInspector(m, dummy);
+        DefineQueryObject(m, dummy);
+        DefineSceneGraph(m, dummy);
+      },
       CommonScalarPack{});
 }
 }  // namespace pydrake

@@ -11,8 +11,10 @@ namespace drake {
 namespace multibody {
 
 namespace internal {
-template <typename T> class MultibodyTree;
-template <typename T> class MultibodyTreeSystem;
+template <typename T>
+class MultibodyTree;
+template <typename T>
+class MultibodyTreeSystem;
 }  // namespace internal
 
 /// A class to hold a set of forces applied to a MultibodyTree system. Forces
@@ -24,7 +26,7 @@ template <typename T> class MultibodyTreeSystem;
 template <typename T>
 class MultibodyForces {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(MultibodyForces)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(MultibodyForces);
 
   /// Constructs a force object to store a set of forces to be applied to
   /// the multibody model for `plant`. Forces are initialized to zero, meaning
@@ -40,6 +42,8 @@ class MultibodyForces {
   /// constructor is useful for constructing the MultibodyForces structure
   /// before a MultibodyPlant has been constructed.
   MultibodyForces(int nb, int nv);
+
+  ~MultibodyForces();
 
   /// Sets `this` to store zero forces (no applied forces).
   MultibodyForces<T>& SetZero();
@@ -98,4 +102,4 @@ class MultibodyForces {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::MultibodyForces)
+    class ::drake::multibody::MultibodyForces);

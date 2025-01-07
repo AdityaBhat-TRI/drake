@@ -1,0 +1,99 @@
+# -*- bazel -*-
+
+load("@rules_python//python:py_exec_tools_toolchain.bzl", "py_exec_tools_toolchain")  # noqa
+load("@rules_python//python:py_runtime.bzl", "py_runtime")
+load("@rules_python//python:py_runtime_pair.bzl", "py_runtime_pair")
+load("@rules_python//python/cc:py_cc_toolchain.bzl", "py_cc_toolchain")
+load(
+    ":version.bzl",
+    "PYTHON_BIN_PATH",
+    "PYTHON_INCLUDES",
+    "PYTHON_LINKOPTS",
+    "PYTHON_VERSION",
+)
+
+package(default_visibility = ["//visibility:private"])
+
+licenses(["notice"])  # Python-2.0
+
+# Only include the first level of headers and specific second level headers
+# included from `python_repository`. This excludes some third-party C headers
+# that may be nested within `/usr/include/python<version>`, such as `numpy`,
+# when installed via `apt` on Ubuntu.
+HDRS = glob(
+    [
+        "include/*/*",
+        "include/*/cpython/*",
+        "include/*/internal/*",
+    ],
+    exclude_directories = 1,
+)
+
+cc_library(
+    name = "cc_headers",
+    hdrs = HDRS,
+    includes = PYTHON_INCLUDES,
+)
+
+cc_library(
+    name = "cc_libs",
+    linkopts = PYTHON_LINKOPTS,
+)
+
+cc_library(
+    name = "python",
+    deps = [
+        ":cc_headers",
+        ":cc_libs",
+    ],
+    visibility = ["//visibility:public"],
+    deprecation = "DRAKE DEPRECATED: This target is deprecated and will be removed from Drake on or after 2025-05-01. As a replacement, use both @drake//tools/workspace/python:cc_headers and @drake//tools/workspace/python:cc_libs.",  # noqa
+)
+
+cc_library(
+    name = "python_direct_link",
+    visibility = ["//visibility:public"],
+    deps = ["@drake//tools/workspace/python:cc_libpython"],
+    deprecation = "DRAKE DEPRECATED: This target is deprecated and will be removed from Drake on or after 2025-05-01. As a replacement, use @drake//tools/workspace/python:cc_libpython.",  # noqa
+)
+
+py_runtime(
+    name = "runtime",
+    interpreter_path = PYTHON_BIN_PATH,
+    python_version = "PY3",
+)
+
+py_runtime_pair(
+    name = "runtime_pair",
+    py3_runtime = ":runtime",
+)
+
+toolchain(
+    name = "toolchain",
+    toolchain = ":runtime_pair",
+    toolchain_type = "@rules_python//python:toolchain_type",
+)
+
+py_exec_tools_toolchain(
+    name = "exec_tools",
+    precompiler = "@rules_python//tools/precompiler:precompiler",
+)
+
+toolchain(
+    name = "exec_tools_toolchain",
+    toolchain = ":exec_tools",
+    toolchain_type = "@rules_python//python:exec_tools_toolchain_type",
+)
+
+py_cc_toolchain(
+    name = "py_cc",
+    headers = ":cc_headers",
+    libs = ":cc_libs",
+    python_version = PYTHON_VERSION,
+)
+
+toolchain(
+    name = "py_cc_toolchain",
+    toolchain = ":py_cc",
+    toolchain_type = "@rules_python//python/cc:toolchain_type",
+)

@@ -58,8 +58,7 @@ class TestGraphAlgorithms(unittest.TestCase):
         # Test the default constructor.
         solver_default = mut.MaxCliqueSolverViaMip()
         self.assertIsNone(solver_default.GetInitialGuess())
-        self.assertFalse(
-            solver_default.GetSolverOptions().get_print_to_console())
+        self.assertEqual(len(solver_default.GetSolverOptions().options), 0)
 
         # Test the argument constructor.
         solver_options = SolverOptions()
@@ -68,21 +67,19 @@ class TestGraphAlgorithms(unittest.TestCase):
         solver = mut.MaxCliqueSolverViaMip(solver_options=solver_options,
                                            initial_guess=initial_guess)
         # Test the getters.
-        numpy_compare.assert_equal(
-            solver.GetInitialGuess(), initial_guess
+        numpy_compare.assert_equal(solver.GetInitialGuess(), initial_guess)
+        self.assertTrue(
+            solver.GetSolverOptions().options["Drake"]["kPrintToConsole"],
         )
-        self.assertTrue(solver.GetSolverOptions().get_print_to_console())
 
         # Test the setters.
         new_guess = np.zeros(graph.shape[0])
         solver.SetInitialGuess(initial_guess=new_guess)
-        numpy_compare.assert_equal(
-            solver.GetInitialGuess(), new_guess
-        )
+        numpy_compare.assert_equal(solver.GetInitialGuess(), new_guess)
 
         new_options = SolverOptions()
         solver.SetSolverOptions(solver_options=new_options)
-        self.assertFalse(solver.GetSolverOptions().get_print_to_console())
+        self.assertEqual(len(solver.GetSolverOptions().options), 0)
 
         # Test solve max clique.
         if GurobiOrMosekSolverAvailable():
@@ -100,3 +97,39 @@ class TestGraphAlgorithms(unittest.TestCase):
         max_clique = solver.SolveMaxClique(graph)
         # Butteryfly graph has a max clique of 3.
         self.assertEqual(max_clique.sum(), 3)
+
+    def test_min_clique_cover_solver_base_subclassable(self):
+        class DummyMinCliqueCoverSolver(mut.MinCliqueCoverSolverBase):
+            def __init__(self, name):
+                mut.MinCliqueCoverSolverBase.__init__(self)
+                self.name = name
+
+            def DoSolveMinCliqueCover(self, adjacency_matrix, partition):
+                # returns all points are in a clique
+                return [set(i for i in range(adjacency_matrix.shape[0]))]
+
+        name = "dummy"
+        solver = DummyMinCliqueCoverSolver(name=name)
+        graph = self._butteryfly_graph()
+        self.assertEqual(name, solver.name)
+        self.assertEqual(
+            solver.SolveMinCliqueCover(adjacency_matrix=graph),
+            [set(i for i in range(5))]
+        )
+
+    def test_min_clique_cover_solver_via_greedy_methods(self):
+        graph = self._butteryfly_graph()
+
+        # Test the default constructor.
+        max_clique_solver = mut.MaxCliqueSolverViaGreedy()
+        solver = mut.MinCliqueCoverSolverViaGreedy(
+            max_clique_solver=max_clique_solver, min_clique_size=3)
+
+        # Test solve min clique cover.
+        min_clique_cover = solver.SolveMinCliqueCover(adjacency_matrix=graph,
+                                                      partition=False)
+        self.assertEqual(len(min_clique_cover), 2)
+
+        self.assertEqual(solver.get_min_clique_size(), 3)
+        solver.set_min_clique_size(min_clique_size=1)
+        self.assertEqual(solver.get_min_clique_size(), 1)

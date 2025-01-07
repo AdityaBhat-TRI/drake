@@ -34,11 +34,11 @@ enum class ForceDensityType {
  input a position in the world frame and returns the force density from the
  force density field at the given location, with unit [N/m³]. The force density
  function can depend on other Context-dependent parameters.
- @tparam_nonsymbolic_scalar */
+ @tparam_default_scalar */
 template <typename T>
 class ForceDensityField {
  public:
-  virtual ~ForceDensityField() = default;
+  virtual ~ForceDensityField();
 
   /** Evaluates the force density [N/m³] with the given `context` of the
    owning MultibodyPlant and a position in world, `p_WQ`. */
@@ -80,26 +80,15 @@ class ForceDensityField {
         `drake/multibody/plant/multibody_plant.h` in the translation unit that
          invokes this function; force_density_field.h cannot do that for you.
    @pre tree_system != nullptr. */
-  template <typename MultibodyPlantDeferred = MultibodyPlant<T>>
-  void DeclareSystemResources(internal::MultibodyTreeSystem<T>* tree_system) {
-    DRAKE_DEMAND(tree_system != nullptr);
-    /* `this` force field isn't already associated with a system. */
-    DRAKE_DEMAND(tree_system_ == nullptr);
-    tree_system_ = tree_system;
-    auto plant = dynamic_cast<MultibodyPlantDeferred*>(tree_system);
-    if (plant == nullptr) {
-      throw std::logic_error(
-          "The given MultibodyTreeSystem does not belong to a MultibodyPlant.");
-    }
-    /* Only cache entries and input ports are supported for now. More system
-     resources (e.g. parameters) can be declared if needed in the future. */
-    DeclareCacheEntries(plant);
-    DeclareInputPorts(plant);
-  }
+  template <typename = void>
+  void DeclareSystemResources(internal::MultibodyTreeSystem<T>* tree_system);
+  // N.B. The implementation of DeclareSystemResources is provided as part of
+  // the plant library in force_density_field_declare_system_resources.cc, to
+  // avoid a dependency cycle.
 #endif
 
  protected:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ForceDensityField)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ForceDensityField);
 
   explicit ForceDensityField(
       ForceDensityType density_type = ForceDensityType::kPerCurrentVolume)
@@ -159,11 +148,12 @@ class ForceDensityField {
 
 /** A uniform gravitational force density field for a uniform density object.
  The force density f [N/m³] is given by the product of mass density
- ρ [kg/m³] and gravity vector g [m/s²]. */
+ ρ [kg/m³] and gravity vector g [m/s²].
+ @tparam_default_scalar */
 template <typename T>
 class GravityForceField : public ForceDensityField<T> {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(GravityForceField)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(GravityForceField);
 
   /** Constructs a uniform gravitational force density field for a uniform
   density object with the given `gravity_vector` [m/s²] and `mass_density`
@@ -173,6 +163,8 @@ class GravityForceField : public ForceDensityField<T> {
   GravityForceField(const Vector3<T>& gravity_vector, const T& mass_density)
       : ForceDensityField<T>(ForceDensityType::kPerReferenceVolume),
         force_density_(mass_density * gravity_vector) {}
+
+  ~GravityForceField() override;
 
  private:
   Vector3<T> DoEvaluateAt(const systems::Context<T>&,
@@ -191,5 +183,8 @@ class GravityForceField : public ForceDensityField<T> {
 }  // namespace multibody
 }  // namespace drake
 
-DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::multibody::ForceDensityField)
+DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
+    class ::drake::multibody::ForceDensityField);
+
+DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
+    class ::drake::multibody::GravityForceField);

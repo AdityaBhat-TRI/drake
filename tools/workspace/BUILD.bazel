@@ -1,10 +1,14 @@
-load("//tools/skylark:py.bzl", "py_library")
 load("//tools/install:check_licenses.bzl", "check_licenses")
 load("//tools/install:install.bzl", "install")
-load("//tools/skylark:drake_py.bzl", "drake_py_binary", "drake_py_test")
 load("//tools/lint:lint.bzl", "add_lint_tests")
+load(
+    "//tools/skylark:drake_py.bzl",
+    "drake_py_binary",
+    "drake_py_library",
+    "drake_py_test",
+)
 
-py_library(
+drake_py_library(
     name = "module_py",
     srcs = ["__init__.py"],
     visibility = [":__subpackages__"],
@@ -46,11 +50,12 @@ drake_py_binary(
         "@fcl_internal//:__subpackages__",
         "@gz_math_internal//:__subpackages__",
         "@gz_utils_internal//:__subpackages__",
-        "@ipopt_internal_fromsource//:__subpackages__",
+        "@ipopt_internal//:__subpackages__",
         "@msgpack_internal//:__subpackages__",
         "@nlopt_internal//:__subpackages__",
         "@qhull_internal//:__subpackages__",
         "@sdformat_internal//:__subpackages__",
+        "@tinygltf_internal//:__subpackages__",
         "@tinyobjloader_internal//:__subpackages__",
         "@yaml_cpp_internal//:__subpackages__",
     ],
@@ -67,6 +72,30 @@ drake_py_test(
     deps = [":module_py"],
 )
 
+drake_py_test(
+    name = "workspace_bzlmod_sync_test",
+    srcs = ["workspace_bzlmod_sync_test.py"],
+    allow_import_unittest = True,
+    data = [
+        ":default.bzl",
+        "//:MODULE.bazel",
+        "//:WORKSPACE.bzlmod",
+        "//tools/workspace/bazel_skylib:repository.bzl",
+        "//tools/workspace/build_bazel_apple_support:repository.bzl",
+        "//tools/workspace/platforms:repository.bzl",
+        "//tools/workspace/rules_cc:repository.bzl",
+        "//tools/workspace/rules_java:repository.bzl",
+        "//tools/workspace/rules_license:repository.bzl",
+        "//tools/workspace/rules_rust:repository.bzl",
+        "//tools/workspace/rules_shell:repository.bzl",
+    ],
+    tags = ["lint"],
+    deps = [
+        ":module_py",
+        "@rules_python//python/runfiles",
+    ],
+)
+
 drake_py_binary(
     name = "cmake_configure_file",
     srcs = ["cmake_configure_file.py"],
@@ -78,18 +107,20 @@ _DRAKE_EXTERNAL_PACKAGE_INSTALLS = ["@%s//:install" % p for p in [
     "clp_internal",
     "coinutils_internal",
     "com_jidesoft_jide_oss",
-    "common_robotics_utilities",
+    "common_robotics_utilities_internal",
     "commons_io",
     "curl_internal",
     "fcl_internal",
     "fmt",
+    "gklib_internal",
     "gz_math_internal",
     "gz_utils_internal",
-    "ipopt",
+    "ipopt_internal",
     "lcm",
     "libpng_internal",
     "libtiff_internal",
     "meshcat",
+    "metis_internal",
     "msgpack_internal",
     "net_sf_jchart2d",
     "nanoflann_internal",
@@ -97,13 +128,16 @@ _DRAKE_EXTERNAL_PACKAGE_INSTALLS = ["@%s//:install" % p for p in [
     "nlopt_internal",
     "org_apache_xmlgraphics_commons",
     "picosha2_internal",
+    "poisson_disk_sampling_internal",
     "pybind11",
     "qhull_internal",
     "sdformat_internal",
     "spdlog",
+    "spral_internal",
     "statsjs",
     "stduuid_internal",
     "suitesparse_internal",
+    "tinygltf_internal",
     "tinyobjloader_internal",
     "tinyxml2_internal",
     "usockets_internal",
@@ -114,34 +148,38 @@ _DRAKE_EXTERNAL_PACKAGE_INSTALLS = ["@%s//:install" % p for p in [
     "abseil_cpp_internal",
     "conex_internal",
     "gflags",
+    "highway_internal",
     "libjpeg_turbo_internal",
 ]] + select({
-    "//conditions:default": ["@csdp_internal//:install"],
-    "//tools:no_csdp": [],
+    "//tools/workspace/csdp_internal:enabled": ["@csdp_internal//:install"],
+    "//conditions:default": [],
 }) + select({
-    "//conditions:default": [
+    "//tools/workspace/clarabel_cpp_internal:enabled": [
         "//tools/workspace/crate_universe:install",
         "@clarabel_cpp_internal//:install",
     ],
-    "//tools:no_clarabel": [],
-}) + select({
-    "//tools:with_gurobi": ["@gurobi//:install"],
     "//conditions:default": [],
 }) + select({
-    "//tools:with_mosek": ["@mosek//:install"],
+    "//tools/workspace/gurobi:enabled": ["@gurobi//:install"],
     "//conditions:default": [],
 }) + select({
-    "//tools:with_snopt": ["//tools/workspace/snopt:install"],
+    "//tools/workspace/mosek:enabled": ["@mosek//:install"],
     "//conditions:default": [],
 }) + select({
-    "//conditions:default": [
+    "//tools/workspace/snopt:enabled": ["//tools/workspace/snopt:install"],
+    "//conditions:default": [],
+}) + select({
+    "//tools/workspace/osqp_internal:enabled": [
         "@osqp_internal//:install",
         "@qdldl_internal//:install",
     ],
-    "//tools:no_osqp": [],
+    "//conditions:default": [],
 }) + select({
-    "//conditions:default": ["@scs_internal//:install"],
-    "//tools:no_scs": [],
+    "//tools/workspace/scs_internal:enabled": ["@scs_internal//:install"],
+    "//conditions:default": [],
+}) + select({
+    "//tools:with_usd": ["@onetbb_internal//:install"],
+    "//conditions:default": [],
 })
 
 install(

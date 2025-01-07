@@ -157,11 +157,8 @@ GTEST_TEST(VPolytopeTest, UnitBoxTest) {
   }
 
   // Test SceneGraph constructor.
-  auto [scene_graph, geom_id] =
+  auto [scene_graph, geom_id, context, query] =
       MakeSceneGraphWithShape(Box(2.0, 2.0, 2.0), RigidTransformd::Identity());
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
 
   VPolytope V_scene_graph(query, geom_id);
   EXPECT_EQ(V.ambient_dimension(), 3);
@@ -170,14 +167,22 @@ GTEST_TEST(VPolytopeTest, UnitBoxTest) {
   EXPECT_FALSE(V.PointInSet(out_W, kTol));
 }
 
+// Tests correct handling of the edge case for the "fail fast heuristic" in
+// PointInSet where the query point is exactly the mean of the vertices. In this
+// case, the heuristic generates a degenerate hyperplane but does not falsely
+// claim a that the mean of the vertices lies outside of the set.
+GTEST_TEST(VPolytopeTest, PointInSetFailFastEdgeCase) {
+  VPolytope V = VPolytope::MakeUnitBox(3);
+  Eigen::VectorXd vertex_mean = V.vertices().rowwise().mean();
+  const double kTol = 1e-11;
+  EXPECT_TRUE(V.PointInSet(vertex_mean, kTol));
+}
+
 GTEST_TEST(VPolytopeTest, ArbitraryBoxTest) {
   const RigidTransformd X_WG(math::RollPitchYawd(.1, .2, 3),
                              Vector3d(-4.0, -5.0, -6.0));
-  auto [scene_graph, geom_id] =
+  auto [scene_graph, geom_id, context, query] =
       MakeSceneGraphWithShape(Box(1.0, 2.0, 3.0), X_WG);
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
   VPolytope V(query, geom_id);
 
   EXPECT_EQ(V.ambient_dimension(), 3);
@@ -245,11 +250,8 @@ void CheckVertices(const Eigen::Ref<const Eigen::Matrix3Xd>& vertices,
 GTEST_TEST(VPolytopeTest, OctahedronTest) {
   const RigidTransformd X_WG(math::RollPitchYawd(.1, .2, 3),
                              Vector3d(-4.0, -5.0, -6.0));
-  auto [scene_graph, geom_id] = MakeSceneGraphWithShape(
+  auto [scene_graph, geom_id, context, query] = MakeSceneGraphWithShape(
       Convex(FindResourceOrThrow("drake/geometry/test/octahedron.obj")), X_WG);
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
   VPolytope V(query, geom_id);
   EXPECT_EQ(V.vertices().cols(), 6);
 
@@ -268,12 +270,9 @@ GTEST_TEST(VPolytopeTest, OctahedronTest) {
 }
 
 GTEST_TEST(VPolytopeTest, NonconvexMesh) {
-  auto [scene_graph, geom_id] = MakeSceneGraphWithShape(
+  auto [scene_graph, geom_id, context, query] = MakeSceneGraphWithShape(
       Mesh(FindResourceOrThrow("drake/geometry/test/non_convex_mesh.obj")),
       RigidTransformd{});
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
   VPolytope V(query, geom_id);
 
   // The non-convex mesh contains 5 vertices, but the convex hull contains only
@@ -293,31 +292,6 @@ GTEST_TEST(VPolytopeTest, NonconvexMesh) {
 
   ASSERT_TRUE(V.MaybeGetFeasiblePoint().has_value());
   EXPECT_TRUE(V.PointInSet(V.MaybeGetFeasiblePoint().value()));
-}
-
-// Confirm that VPolytope will complain about non-obj mesh/convex shapes even
-// if SceneGraph stops complaining. Likewise confirm that GetVertices complains.
-GTEST_TEST(VPolytopeTest, UnsupportedMeshTypes) {
-  const Convex convex("bad_extension.stl");
-  const Mesh mesh("bad_extension.stl");
-
-  for (const auto* shape : std::vector<const Shape*>{&convex, &mesh}) {
-    const RigidTransformd X_WG;
-    // We can't add proximity properties; ProximityEngine would reject it.
-    const bool add_proximity_properties = false;
-    auto [scene_graph, geom_id] =
-        MakeSceneGraphWithShape(*shape, X_WG, add_proximity_properties);
-    auto context = scene_graph->CreateDefaultContext();
-    auto query = scene_graph->get_query_output_port().Eval<QueryObject<double>>(
-        *context);
-    DRAKE_EXPECT_THROWS_MESSAGE(
-        VPolytope(query, geom_id),
-        "VPolytope can only use mesh shapes .* '.*bad_extension.stl'.");
-  }
-
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      GetVertices(convex),
-      "GetVertices\\(\\) can only use mesh shapes .* '.*bad_extension.stl'.");
 }
 
 GTEST_TEST(VPolytopeTest, UnitBox6DTest) {
@@ -463,6 +437,33 @@ GTEST_TEST(VPolytopeTest, FromUnboundedHPolytopeTest) {
   HPolyhedron H(A, b);
 
   DRAKE_EXPECT_THROWS_MESSAGE(VPolytope{H}, ".*hpoly.IsBounded().*");
+}
+
+GTEST_TEST(VPolytopeTest, FromDegenerateHPolytope) {
+  // The L1 ball in three dimensions always has 4 hyperplanes actives at every
+  // vertex, but no hyperplane is degenerate in our implementation. This leads
+  // to QHull constructing an overdetermined linear system when solving for the
+  // vertices.
+  HPolyhedron H = HPolyhedron::MakeL1Ball(3);
+  VPolytope V(H);
+  Eigen::MatrixXd vertices_expected(3, 6);
+  // clang-format off
+  vertices_expected << 1, -1,  0,  0,  0,  0,
+                       0,  0,  1, -1,  0,  0,
+                       0,  0,  0,  0,  1, -1;
+  // clang-format on
+  EXPECT_EQ(vertices_expected.cols(), V.vertices().cols());
+  for (int i = 0; i < vertices_expected.cols(); ++i) {
+    bool found_match = false;
+    for (int j = 0; j < vertices_expected.cols(); ++j) {
+      if (CompareMatrices(vertices_expected.col(i), V.vertices().col(j),
+                          1e-11)) {
+        found_match = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(found_match);
+  }
 }
 
 GTEST_TEST(VPolytopeTest, ConstructorFromHPolyhedronQHullProblems) {
@@ -821,7 +822,7 @@ GTEST_TEST(VPolytopeTest, GetMinimalRepresentationTest) {
 }
 
 // Confirm that WriteObj generates an Obj file that can be read back in to
-// obtain the same VPolytope. All of the geometry work is done by qhull; this
+// obtain the same VPolytope. All of the geometry work is done by Convex; this
 // test simply covers the data flow.
 GTEST_TEST(VPolytopeTest, WriteObjTest) {
   VPolytope V = VPolytope::MakeUnitBox(3);
@@ -829,11 +830,8 @@ GTEST_TEST(VPolytopeTest, WriteObjTest) {
   const std::string filename = temp_directory() + "/vpolytope.obj";
   V.WriteObj(filename);
 
-  auto [scene_graph, geom_id] =
+  auto [scene_graph, geom_id, context, query] =
       MakeSceneGraphWithShape(Convex(filename, 1), RigidTransformd::Identity());
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
 
   VPolytope V_scene_graph(query, geom_id);
   CheckVertices(V.vertices(), V_scene_graph.vertices(), 1e-6);
@@ -849,6 +847,105 @@ GTEST_TEST(VPolytopeTest, EmptyTest) {
   ASSERT_FALSE(V.IntersectsWith(V));
   EXPECT_FALSE(V.MaybeGetPoint().has_value());
   EXPECT_FALSE(V.PointInSet(Eigen::VectorXd::Zero(3)));
+}
+
+GTEST_TEST(VPolytopeTest, DegenerateMinimalRepresentation1) {
+  // Empty VPolytope.
+  Matrix<double, 3, 0> degenerate;
+
+  VPolytope v(degenerate);
+  EXPECT_NO_THROW(v.GetMinimalRepresentation());
+  VPolytope v_minimal = v.GetMinimalRepresentation();
+
+  EXPECT_EQ(v_minimal.vertices().rows(), 3);
+  EXPECT_EQ(v_minimal.vertices().cols(), 0);
+}
+
+GTEST_TEST(VPolytopeTest, DegenerateMinimalRepresentation2) {
+  // One dimensional instance with one point.
+  Matrix<double, 1, 1> degenerate;
+  degenerate << 43;
+
+  VPolytope v(degenerate);
+  EXPECT_NO_THROW(v.GetMinimalRepresentation());
+  VPolytope v_minimal = v.GetMinimalRepresentation();
+
+  const double kTol{1E-15};
+  ASSERT_EQ(v_minimal.vertices().rows(), 1);
+  ASSERT_EQ(v_minimal.vertices().cols(), 1);
+  EXPECT_NEAR(v_minimal.vertices()(0, 0), 43, kTol);
+}
+
+GTEST_TEST(VPolytopeTest, DegenerateMinimalRepresentation3) {
+  // One dimensional instance with more than one point.
+  Matrix<double, 1, 5> degenerate;
+  degenerate << 0, 1, 2, 3, 4;
+
+  VPolytope v(degenerate);
+  EXPECT_NO_THROW(v.GetMinimalRepresentation());
+  VPolytope v_minimal = v.GetMinimalRepresentation();
+
+  const double kTol{1E-15};
+  ASSERT_EQ(v_minimal.vertices().rows(), 1);
+  ASSERT_EQ(v_minimal.vertices().cols(), 2);
+  double lower = v_minimal.vertices().row(0).minCoeff();
+  double upper = v_minimal.vertices().row(0).maxCoeff();
+  EXPECT_NEAR(lower, 0, kTol);
+  EXPECT_NEAR(upper, 4, kTol);
+}
+
+GTEST_TEST(VPolytopeTest, DegenerateMinimalRepresentation4) {
+  // Two dimensional instance with only two points.
+  Matrix<double, 2, 2> degenerate;
+  // clang-format off
+  degenerate << 0, 1,
+                0, 1;
+  // clang-format on
+
+  VPolytope v(degenerate);
+  EXPECT_NO_THROW(v.GetMinimalRepresentation());
+  VPolytope v_minimal = v.GetMinimalRepresentation();
+
+  const double kTol{1E-15};
+  ASSERT_EQ(v_minimal.vertices().rows(), 2);
+  ASSERT_EQ(v_minimal.vertices().cols(), 2);
+  Eigen::Vector2d lower, upper;
+  lower = v_minimal.vertices().col(0);
+  upper = v_minimal.vertices().col(1);
+  if (lower[0] > upper[0]) {
+    std::swap(lower, upper);
+  }
+  EXPECT_NEAR(lower[0], 0, kTol);
+  EXPECT_NEAR(lower[1], 0, kTol);
+  EXPECT_NEAR(upper[0], 1, kTol);
+  EXPECT_NEAR(upper[1], 1, kTol);
+}
+
+GTEST_TEST(VPolytopeTest, DegenerateMinimalRepresentation5) {
+  // Two dimensional instance with three points along a proper affine subspace.
+  Matrix<double, 2, 3> degenerate;
+  // clang-format off
+  degenerate << 0, 1, 2,
+                0, 1, 2;
+  // clang-format on
+
+  VPolytope v(degenerate);
+  EXPECT_NO_THROW(v.GetMinimalRepresentation());
+  VPolytope v_minimal = v.GetMinimalRepresentation();
+
+  const double kTol{1E-15};
+  ASSERT_EQ(v_minimal.vertices().rows(), 2);
+  ASSERT_EQ(v_minimal.vertices().cols(), 2);
+  Eigen::Vector2d lower, upper;
+  lower = v_minimal.vertices().col(0);
+  upper = v_minimal.vertices().col(1);
+  if (lower[0] > upper[0]) {
+    std::swap(lower, upper);
+  }
+  EXPECT_NEAR(lower[0], 0, kTol);
+  EXPECT_NEAR(lower[1], 0, kTol);
+  EXPECT_NEAR(upper[0], 2, kTol);
+  EXPECT_NEAR(upper[1], 2, kTol);
 }
 
 }  // namespace optimization

@@ -65,7 +65,7 @@ using remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
 /// User-defined classes with additional features may inherit from Value.
 class AbstractValue {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(AbstractValue)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(AbstractValue);
 
   virtual ~AbstractValue();
 
@@ -198,7 +198,7 @@ class AbstractValue {
 template <typename T>
 class Value : public AbstractValue {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Value)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Value);
 
   static_assert(std::is_same_v<T, internal::remove_cvref_t<T>>,
                 "T should not have const, volatile, or reference qualifiers.");
@@ -240,7 +240,7 @@ class Value : public AbstractValue {
   /// @pre v is non-null.
   explicit Value(std::unique_ptr<T> v);
 
-  ~Value() override {}
+  ~Value() override = default;
 
   /// Returns a const reference to the stored value.
   /// The reference remains valid only until this object is set or destroyed.

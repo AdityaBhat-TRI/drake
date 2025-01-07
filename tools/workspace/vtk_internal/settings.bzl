@@ -100,7 +100,7 @@ MODULE_SETTINGS = {
             # use generate_common_core_sources() from rules.bzl to handle it.
             "Common/Core/vtkArrayDispatchArrayList.h.in",
             "Common/Core/vtkTypeListMacros.h.in",
-            "Common/Core/vtkTypedArray.h.in",
+            "Common/Core/vtk*TypedArray.h.in",
         ],
         "hdrs_extra": [
             # These are the hdrs outputs of generate_common_core_sources() from
@@ -204,6 +204,13 @@ MODULE_SETTINGS = {
     },
     "VTK::CommonExecutionModel": {
         "visibility": ["//visibility:public"],
+        "srcs_glob_exclude": [
+            # This file is just a pile of static (i.e., exit-time) destructors.
+            # The Drake build & release posture does not permit static dtors,
+            # so we have the disable_static_destructors.patch that stubs out
+            # all of these functions and then here we opt-out of compiling it.
+            "**/vtkFilteringInformationKeyManager.cxx",
+        ],
     },
     "VTK::CommonMath": {
         "visibility": ["//visibility:public"],
@@ -254,8 +261,10 @@ MODULE_SETTINGS = {
             "Filters/Core/vtkAppendPolyData.cxx",
             "Filters/Core/vtkDecimatePro.cxx",
             "Filters/Core/vtkGlyph3D.cxx",
+            "Filters/Core/vtkOrientPolyData.cxx",
             "Filters/Core/vtkPolyDataNormals.cxx",
             "Filters/Core/vtkPolyDataTangents.cxx",
+            "Filters/Core/vtkSplitSharpEdgesPolyData.cxx",
             "Filters/Core/vtkTriangleFilter.cxx",
         ],
     },
@@ -307,6 +316,9 @@ MODULE_SETTINGS = {
             "VTK::ImagingSources",
         ],
     },
+    "VTK::FiltersReduction": {
+        # VTK uses this module internally but we don't need to customize it.
+    },
     "VTK::FiltersSources": {
         "visibility": ["//visibility:public"],
         "srcs_glob_exclude": [
@@ -315,9 +327,12 @@ MODULE_SETTINGS = {
             "**/vtkPartitionedDataSetSource.cxx",
             # Avoid some VTK::FiltersGeneral stuff we don't need.
             "**/vtkSpatioTemporalHarmonicsSource.cxx",
+            # Avoid the need for vtkDelaunay3D.
+            "**/vtkGoldenBallSource.cxx",
         ],
     },
     "VTK::IOCore": {
+        "visibility": ["//visibility:public"],
         "srcs_glob_exclude": [
             # Skip code we don't need.
             "**/*Glob*",
@@ -369,6 +384,7 @@ MODULE_SETTINGS = {
             "IO/Geometry/vtkGLTFDocumentLoader.cxx",
             "IO/Geometry/vtkGLTFDocumentLoaderInternals.cxx",
             "IO/Geometry/vtkGLTFReader.cxx",
+            "IO/Geometry/vtkGLTFTexture.cxx",
             "IO/Geometry/vtkGLTFUtils.cxx",
             "IO/Geometry/vtkGLTFWriter.cxx",
             "IO/Geometry/vtkGLTFWriterUtils.cxx",
@@ -423,6 +439,9 @@ MODULE_SETTINGS = {
             "IO/Legacy/vtkDataReader.cxx",
             "IO/Legacy/vtkUnstructuredGridReader.cxx",
         ],
+        "module_deps_ignore": [
+            "VTK::IOCellGrid",
+        ],
     },
     "VTK::ImagingCore": {
         "visibility": ["//visibility:public"],
@@ -441,14 +460,13 @@ MODULE_SETTINGS = {
                 "VTK_USE_COCOA",
             ],
             "//conditions:default": [
+                "VTK_OPENGL_HAS_EGL",
                 "VTK_USE_X",
             ],
         }),
         "cmake_undefines": [
             "VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN",
             "VTK_OPENGL_ENABLE_STREAM_ANNOTATIONS",
-            "VTK_OPENGL_HAS_EGL",
-            "VTK_OPENGL_HAS_OSMESA",
             "VTK_REPORT_OPENGL_ERRORS",
             "VTK_REPORT_OPENGL_ERRORS_IN_RELEASE_BUILDS",
             "VTK_USE_CORE_GRAPHICS",
@@ -456,6 +474,7 @@ MODULE_SETTINGS = {
             "VTK_USE_NVCONTROL",
         ] + select({
             ":osx": [
+                "VTK_OPENGL_HAS_EGL",
                 "VTK_USE_X",
             ],
             "//conditions:default": [
@@ -466,18 +485,18 @@ MODULE_SETTINGS = {
             ":generated_rendering_opengl2_sources",
         ],
         "srcs_glob_exclude": [
+            # Avoid the dependency on freetype.
+            "**/vtkFastLabeledDataMapper*",
             # This is configure-time setup code, not library code.
             "**/vtkProbe*",
+            # This file uses codegen'd embedded vtp files. We don't need it.
+            "**/*vtkOpenGLAvatar*",
             # Avoid building unnecessary VTK::RenderingHyperTreeGrid.
             "**/*HyperTreeGrid*",
-            # Exclude all renderers by default; we'll incorporate the necessary
-            # ones using with srcs_extra immediately below.
-            "**/vtkCocoa*",
-            "**/vtkEGL*",
-            "**/vtkOSOpenGL*",
-            "**/vtkSDL2OpenGL*",
-            "**/vtkWin32OpenGL*",
-            "**/vtkXOpenGL*",
+            # Exclude all renderers by default (also excluding the base class,
+            # so that the glob is easier to write); we'll incorporate the
+            # necessary renderer sources using srcs_extra immediately below.
+            "**/*RenderWindow*",
         ],
         "srcs_objc_non_arc": select({
             ":osx": [
@@ -486,17 +505,26 @@ MODULE_SETTINGS = {
             ],
             "//conditions:default": [],
         }),
-        "srcs_extra": select({
-            ":osx": [],
-            "//conditions:default": [
-                "Rendering/OpenGL2/vtkXOpenGLRenderWindow.cxx",
-            ],
-        }) + [
+        "srcs_extra": [
+            # In srcs_glob_exclude, we excluded all renderers. We'll put back
+            # the GL window now, which is needed by all of our platforms.
+            "Rendering/OpenGL2/vtkOpenGLRenderWindow.cxx",
             # The vtkObjectFactory.cmake logic for vtk_object_factory_configure
             # is too difficult to implement in Bazel at the moment. Instead,
             # we'll commit the two generated files and directly mention them.
             "@drake//tools/workspace/vtk_internal:gen/vtkRenderingOpenGL2ObjectFactory.h",  # noqa
             "@drake//tools/workspace/vtk_internal:gen/vtkRenderingOpenGL2ObjectFactory.cxx",  # noqa
+        ] + select({
+            ":osx": [],
+            "//conditions:default": [
+                # On linux, we also want the EGL and GLX renderers.
+                "Rendering/OpenGL2/vtkEGLRenderWindow.cxx",
+                "Rendering/OpenGL2/vtkXOpenGLRenderWindow.cxx",
+            ],
+        }),
+        "copts_extra": [
+            # Match COMPILE_DEFINITIONS from the upstream CMakeLists.txt.
+            "-DVTK_DEFAULT_EGL_DEVICE_INDEX=0",
         ],
         "linkopts_extra": select({
             ":osx": [
@@ -513,6 +541,8 @@ MODULE_SETTINGS = {
             ],
         }),
         "module_deps_ignore": [
+            "VTK::IOXML",
+            "VTK::RenderingFreeType",
             "VTK::RenderingHyperTreeGrid",
         ],
     },
@@ -551,11 +581,6 @@ MODULE_SETTINGS = {
         ],
         "deps_extra": [
             "@nlohmann_internal//:nlohmann",
-        ],
-    },
-    "VTK::opengl": {
-        "deps_extra": [
-            "@opengl",
         ],
     },
     "VTK::png": {
@@ -608,27 +633,29 @@ MODULE_SETTINGS = {
             "VTK_MODULE_USE_EXTERNAL_vtkfast_float",
         ],
     },
-    "VTK::glew": {
+    "VTK::glad": {
+        "visibility": ["//visibility:public"],
         "cmake_undefines": [
-            "VTK_GLEW_SHARED",
-            "VTK_MODULE_USE_EXTERNAL_vtkglew",
-            "VTK_MODULE_vtkglew_GLES3",
+            "VTK_MODULE_vtkglad_GLES3",
         ],
         "srcs_extra": [
-            "ThirdParty/glew/vtkglew/src/glew.c",
-        ],
-        "copts_extra": [
-            "-Iexternal/vtk_internal/ThirdParty/glew/vtkglew/include",
-            # Match the target_compile_definitions() from CMakeLists.txt.
-            "-DGLEW_NO_GLU",
-        ],
-        "linkopts_extra": select({
+            "ThirdParty/glad/vtkglad/src/gl.c",
+        ] + select({
             ":osx": [],
             "//conditions:default": [
-                "-lX11",
-                "-lGLX",
+                "ThirdParty/glad/vtkglad/src/egl.c",
+                "ThirdParty/glad/vtkglad/src/glx.c",
             ],
         }),
+        "copts_extra": [
+            "-fvisibility=hidden",
+        ],
+        "includes_extra": [
+            "ThirdParty/glad/vtkglad/include",
+        ],
+        "deps_extra": [
+            "@opengl",
+        ],
     },
     "VTK::pugixml": {
         # TODO(jwnimmer-tri) The only user of pugixml is vtkDataAssembly.

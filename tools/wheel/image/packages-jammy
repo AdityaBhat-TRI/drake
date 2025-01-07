@@ -13,7 +13,7 @@ libgfortran-11-dev
 nasm
 yasm
 # Clang (for mkdoc).
-libclang-14-dev
+libclang-15-dev
 # Other code tools.
 cmake
 git
@@ -23,7 +23,6 @@ pkg-config
 # Other general tools.
 file
 patch
-ssh
 wget
 unzip
 zip
@@ -31,8 +30,11 @@ zip
 # Build dependencies (general).
 libgl1-mesa-dev
 libglib2.0-dev
-libmumps-seq-dev
 libxt-dev
 # Build dependencies (OpenCL).
 opencl-headers
 ocl-icd-opencl-dev
+
+# Remove on 2025-05-01.
+# Likewise remove mumps from setup/**.txt files.
+libmumps-seq-dev

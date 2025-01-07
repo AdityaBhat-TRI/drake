@@ -243,7 +243,7 @@ class DRAKE_NO_EXPORT MakeFclShape : public ShapeReifier {
 };
 
 /* Reports if the Mesh shape is represented as a Convex shape under the hood. */
-::testing::AssertionResult MeshIsConvex();
+::testing::AssertionResult MeshIsConvexInFcl();
 
 /* Creates a transform to align two planes. The planes are defined by a
  (point, normal) pair -- the point lies on the plane and the normal is
@@ -448,6 +448,6 @@ struct formatter<drake::geometry::internal::GeometryType>
 }  // namespace fmt
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::geometry::internal::CharacterizeResultTest)
+    class ::drake::geometry::internal::CharacterizeResultTest);
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::geometry::internal::ShapeConfigurations)
+    class ::drake::geometry::internal::ShapeConfigurations);

@@ -373,10 +373,10 @@ directives:
     child: ground::ground_plane_box
 - add_model:
     name: chassis
-    file: package://drake/manipulation/models/ycb/sdf/010_potted_meat_can.sdf
+    file: package://drake_models/ycb/010_potted_meat_can.sdf
 - add_model:
     name: arm
-    file: package://drake/manipulation/models/iiwa_description/urdf/iiwa14_spheres_dense_collision.urdf
+    file: package://drake_models/iiwa_description/urdf/iiwa14_spheres_dense_collision.urdf
 - add_weld:
     parent: chassis::base_link_meat
     child: arm::base
@@ -443,10 +443,10 @@ directives:
     child: ground::ground_plane_box
 - add_model:
     name: chassis
-    file: package://drake/manipulation/models/ycb/sdf/010_potted_meat_can.sdf
+    file: package://drake_models/ycb/010_potted_meat_can.sdf
 - add_model:
     name: arm
-    file: package://drake/manipulation/models/iiwa_description/urdf/iiwa14_spheres_dense_collision.urdf
+    file: package://drake_models/iiwa_description/urdf/iiwa14_spheres_dense_collision.urdf
 - add_weld:
     parent: chassis::base_link_meat
     child: arm::base

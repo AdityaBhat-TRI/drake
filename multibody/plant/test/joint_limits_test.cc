@@ -3,7 +3,6 @@
 
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/multibody/parsing/parser.h"
 #include "drake/multibody/plant/multibody_plant.h"
@@ -22,8 +21,8 @@ using systems::Simulator;
 namespace multibody {
 namespace {
 
-const char kIiwaFilePath[] =
-    "drake/manipulation/models/iiwa_description/sdf/iiwa14_no_collision.sdf";
+const char kIiwaUrl[] =
+    "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf";
 
 // These unit tests verify the convergence of the joint limits as the time step
 // is decreased. A constant force is applied at the joint to drive its state to
@@ -196,7 +195,7 @@ VectorX<double> KukaPositionUpperLimits() {
 
 void SetReflectedInertiaToZero(MultibodyPlant<double>* plant) {
   DRAKE_DEMAND(plant != nullptr);
-  for (JointActuatorIndex index(0); index < plant->num_actuators(); ++index) {
+  for (JointActuatorIndex index : plant->GetJointActuatorIndices()) {
     JointActuator<double>& joint_actuator =
         plant->get_mutable_joint_actuator(index);
     joint_actuator.set_default_rotor_inertia(0.0);
@@ -230,7 +229,7 @@ GTEST_TEST(JointLimitsTest, KukaArm) {
   const double kRelativePositionTolerance = 0.055;
 
   MultibodyPlant<double> plant(time_step);
-  Parser(&plant).AddModels(FindResourceOrThrow(kIiwaFilePath));
+  Parser(&plant).AddModelsFromUrl(kIiwaUrl);
   plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("iiwa_link_0"));
   plant.mutable_gravity_field().set_gravity_vector(Vector3<double>::Zero());
   SetReflectedInertiaToZero(&plant);
@@ -303,7 +302,7 @@ GTEST_TEST(JointLimitsTest, KukaArm) {
 GTEST_TEST(JointLimitsTest, KukaArmFloating) {
   // Check limits for a model with a floating base.
   MultibodyPlant<double> plant(0.0);
-  Parser(&plant).AddModels(FindResourceOrThrow(kIiwaFilePath));
+  Parser(&plant).AddModelsFromUrl(kIiwaUrl);
   plant.Finalize();
   const int nq = 14;
   const int nq_floating = 7;
@@ -326,7 +325,7 @@ GTEST_TEST(JointLimitsTest, KukaArmFloating) {
 // for a continuous plant. This is merely to confirm that nothing crashes.
 GTEST_TEST(JointLimitsTest, ContinuousLimitsDoNotFault) {
   MultibodyPlant<double> plant(0.0);
-  Parser(&plant).AddModels(FindResourceOrThrow(kIiwaFilePath));
+  Parser(&plant).AddModelsFromUrl(kIiwaUrl);
   plant.Finalize();
   auto context = plant.CreateDefaultContext();
   plant.get_actuation_input_port().FixValue(context.get(),

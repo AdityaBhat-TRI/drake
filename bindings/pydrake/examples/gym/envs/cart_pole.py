@@ -1,5 +1,4 @@
 import gymnasium as gym
-import matplotlib.pyplot as plt
 import numpy as np
 
 from pydrake.common import FindResourceOrThrow
@@ -29,6 +28,10 @@ from pydrake.multibody.plant import (
     ExternallyAppliedSpatialForce_,
     MultibodyPlant,
     MultibodyPlantConfig,
+)
+from pydrake.multibody.tree import (
+    PrismaticJoint,
+    RevoluteJoint,
 )
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.drawing import plot_graphviz, plot_system_graphviz
@@ -78,7 +81,7 @@ def make_sim(meshcat=None,
         time_step=sim_time_step,
         contact_model=contact_model,
         discrete_contact_approximation=contact_approximation,
-        )
+    )
 
     plant, scene_graph = AddMultibodyPlant(multibody_plant_config, builder)
 
@@ -121,6 +124,7 @@ def make_sim(meshcat=None,
         print("Actuation view: ", actuation_view(np.ones(na)), '\n')
 
         # Visualize the plant.
+        import matplotlib.pyplot as plt
         plt.figure()
         plot_graphviz(plant.GetTopologyGraphvizString())
         plt.plot(1)
@@ -338,14 +342,14 @@ def reset_handler(simulator, diagram_context, seed):
     # Ensure the positions are within the joint limits.
     for pair in home_positions:
         joint = plant.GetJointByName(pair[0])
-        if joint.type_name() == "revolute":
+        if joint.type_name() == RevoluteJoint.kTypeName:
             joint.set_angle(plant_context,
                             np.clip(pair[1],
                                     joint.position_lower_limit(),
                                     joint.position_upper_limit()
                                     )
                             )
-        if joint.type_name() == "prismatic":
+        if joint.type_name() == PrismaticJoint.kTypeName:
             joint.set_translation(plant_context,
                                   np.clip(pair[1],
                                           joint.position_lower_limit(),
@@ -354,7 +358,7 @@ def reset_handler(simulator, diagram_context, seed):
                                   )
     for pair in home_velocities:
         joint = plant.GetJointByName(pair[0])
-        if joint.type_name() == "revolute":
+        if joint.type_name() == RevoluteJoint.kTypeName:
             joint.set_angular_rate(plant_context,
                                    np.clip(pair[1],
                                            joint.velocity_lower_limit(),
@@ -365,6 +369,12 @@ def reset_handler(simulator, diagram_context, seed):
         body = plant.GetBodyByName(pair[0])
         mass = body.get_mass(plant.CreateDefaultContext())
         body.SetMass(plant_context, mass+pair[1])
+
+
+def info_handler(simulator: Simulator) -> dict:
+    info = dict()
+    info["timestamp"] = simulator.get_context().get_time()
+    return info
 
 
 def DrakeCartPoleEnv(
@@ -411,6 +421,7 @@ def DrakeCartPoleEnv(
         action_port_id="actions",
         observation_port_id="observations",
         reset_handler=reset_handler,
+        info_handler=info_handler,
         render_rgb_port_id="color_image" if monitoring_camera else None)
 
     # Expose parameters that could be useful for learning.

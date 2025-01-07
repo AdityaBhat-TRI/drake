@@ -32,7 +32,7 @@ class UniversalJointTest : public ::testing::Test {
   void SetUp() override {
     // Spatial inertia for adding bodies. The actual value is not important for
     // these tests and therefore we do not initialize it.
-    const SpatialInertia<double> M_B;  // Default construction is ok for this.
+    const auto M_B = SpatialInertia<double>::NaN();
 
     // Create an empty model.
     auto model = std::make_unique<internal::MultibodyTree<double>>();
@@ -60,7 +60,7 @@ class UniversalJointTest : public ::testing::Test {
     // We are done adding modeling elements. Transfer tree to system and get
     // a Context.
     system_ = std::make_unique<internal::MultibodyTreeSystem<double>>(
-        std::move(model), true/* is_discrete */);
+        std::move(model), true /* is_discrete */);
     context_ = system_->CreateDefaultContext();
   }
 
@@ -117,13 +117,6 @@ TEST_F(UniversalJointTest, GetJointLimits) {
 TEST_F(UniversalJointTest, Damping) {
   EXPECT_EQ(joint_->default_damping(), kDamping);
   EXPECT_EQ(joint_->default_damping_vector(), Vector2d::Constant(kDamping));
-
-  // Ensure the deprecated versions are correct until removal.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  EXPECT_EQ(joint_->damping(), kDamping);
-  EXPECT_EQ(joint_->damping_vector(), Vector2d::Constant(kDamping));
-#pragma GCC diagnostic pop
 }
 
 // Context-dependent value access.
@@ -192,7 +185,8 @@ TEST_F(UniversalJointTest, AddInDamping) {
 
 TEST_F(UniversalJointTest, Clone) {
   auto model_clone = tree().CloneToScalar<AutoDiffXd>();
-  const auto& joint_clone = model_clone->get_variant(*joint_);
+  const auto& joint_clone = dynamic_cast<const UniversalJoint<AutoDiffXd>&>(
+      model_clone->get_variant(*joint_));
 
   EXPECT_EQ(joint_clone.name(), joint_->name());
   EXPECT_EQ(joint_clone.frame_on_parent().index(),
@@ -295,8 +289,7 @@ TEST_F(UniversalJointTest, DefaultAngles) {
 
   // Setting the default angle out of the bounds of the position limits
   // should NOT throw an exception.
-  EXPECT_NO_THROW(
-      mutable_joint_->set_default_angles(out_of_bounds_low_angles));
+  EXPECT_NO_THROW(mutable_joint_->set_default_angles(out_of_bounds_low_angles));
   EXPECT_NO_THROW(
       mutable_joint_->set_default_angles(out_of_bounds_high_angles));
 }

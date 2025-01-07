@@ -1,16 +1,16 @@
 # -*- bazel -*-
 
-load("@drake//tools/skylark:drake_java.bzl", "drake_java_binary")
+load("@drake//tools/install:install.bzl", "install", "install_files")
+load("@drake//tools/lint:python_lint.bzl", "python_lint")
 load("@drake//tools/skylark:cc.bzl", "cc_binary", "cc_library")
+load("@drake//tools/skylark:drake_java.bzl", "drake_java_binary")
+load("@drake//tools/skylark:java.bzl", "java_library")
 load("@drake//tools/skylark:py.bzl", "py_library")
-load("@drake//tools/workspace:generate_file.bzl", "generate_file")
 load(
     "@drake//tools/workspace:generate_export_header.bzl",
     "generate_export_header",
 )
-load("@drake//tools/install:install.bzl", "install", "install_files")
-load("@drake//tools/lint:python_lint.bzl", "python_lint")
-load("@python//:version.bzl", "PYTHON_EXTENSION_SUFFIX")
+load("@drake//tools/workspace:generate_file.bzl", "generate_file")
 
 licenses([
     "notice",  # BSD-3-Clause
@@ -106,7 +106,7 @@ cc_binary(
             "-pthread",  # For lcm_(mp)udpm.c.
             "-Wl,-soname,libdrake_lcm.so",
         ],
-        "@//conditions:default": [],
+        "//conditions:default": [],
     }),
     linkshared = 1,
     visibility = ["//visibility:private"],
@@ -179,7 +179,7 @@ cc_binary(
 )
 
 cc_binary(
-    name = "_lcm" + PYTHON_EXTENSION_SUFFIX,
+    name = "_lcm.so",
     srcs = [
         "lcm-python/module.c",
         "lcm-python/pyeventlog.c",
@@ -195,7 +195,8 @@ cc_binary(
     visibility = ["//visibility:private"],
     deps = [
         ":lcm",
-        "@python",
+        "@drake//tools/workspace/python:cc_headers",
+        "@drake//tools/workspace/python:cc_libs",
     ],
 )
 
@@ -229,20 +230,19 @@ generate_file(
     content = """
 import ctypes
 import os.path
-ctypes.cdll.LoadLibrary(os.path.realpath(
-     __path__[0] + '/_lcm{extension_suffix}'))
+ctypes.cdll.LoadLibrary(os.path.realpath(__path__[0] + '/_lcm.so'))
 _filename = __path__[0] + \"/lcm-python/lcm/__init__.py\"
 with open(_filename) as f:
     _code = compile(f.read(), _filename, 'exec')
     exec(_code)
-""".format(extension_suffix = PYTHON_EXTENSION_SUFFIX),
+""",
     visibility = ["//visibility:private"],
 )
 
 py_library(
     name = "lcm-python-upstream",
     srcs = ["lcm-python/lcm/__init__.py"],  # Actual code from upstream.
-    data = [":_lcm" + PYTHON_EXTENSION_SUFFIX],
+    data = [":_lcm.so"],
     visibility = ["//visibility:private"],
 )
 
@@ -304,10 +304,10 @@ install_files(
 install(
     name = "install_python",
     targets = [
-        ":_lcm" + PYTHON_EXTENSION_SUFFIX,
+        ":_lcm.so",
         ":lcm-python-upstream",
     ],
-    library_dest = "@PYTHON_SITE_PACKAGES@/lcm",
+    library_dest = "lib/python@PYTHON_VERSION@/site-packages/lcm",
     py_strip_prefix = ["lcm-python"],
 )
 

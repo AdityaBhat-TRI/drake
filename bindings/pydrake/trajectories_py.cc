@@ -1,14 +1,18 @@
 #include "pybind11/eval.h"
 
 #include "drake/bindings/pydrake/common/default_scalars_pybind.h"
+#include "drake/bindings/pydrake/common/deprecation_pybind.h"
 #include "drake/bindings/pydrake/documentation_pybind.h"
 #include "drake/bindings/pydrake/polynomial_types_pybind.h"
 #include "drake/bindings/pydrake/pydrake_pybind.h"
+#include "drake/common/nice_type_name.h"
 #include "drake/common/polynomial.h"
 #include "drake/common/trajectories/bezier_curve.h"
 #include "drake/common/trajectories/bspline_trajectory.h"
 #include "drake/common/trajectories/composite_trajectory.h"
 #include "drake/common/trajectories/derivative_trajectory.h"
+#include "drake/common/trajectories/exponential_plus_piecewise_polynomial.h"
+#include "drake/common/trajectories/function_handle_trajectory.h"
 #include "drake/common/trajectories/path_parameterized_trajectory.h"
 #include "drake/common/trajectories/piecewise_polynomial.h"
 #include "drake/common/trajectories/piecewise_pose.h"
@@ -156,15 +160,13 @@ struct Impl {
     TrajectoryPublic() = default;
 
     // Virtual methods, for explicit bindings.
-    using Base::Clone;
-    using Base::cols;
+    using Base::do_cols;
+    using Base::do_end_time;
     using Base::do_has_derivative;
-    using Base::DoEvalDerivative;
-    using Base::DoMakeDerivative;
-    using Base::end_time;
-    using Base::rows;
-    using Base::start_time;
-    using Base::value;
+    using Base::do_rows;
+    using Base::do_start_time;
+    using Base::do_value;
+    using Base::DoClone;
   };
 
   class PyTrajectory : public py::wrapper<TrajectoryPublic> {
@@ -172,35 +174,40 @@ struct Impl {
     using Base = py::wrapper<TrajectoryPublic>;
     using Base::Base;
 
+    void WarnDeprecatedOverride(std::string_view func_name) const {
+      WarnDeprecated(
+          fmt::format(
+              "Support for overriding {}.{} as a virtual function is "
+              "deprecated. Subclasses should override the do_{} virtual "
+              "function, instead.",
+              NiceTypeName::Get(*this), func_name, func_name),
+          "2025-08-01");
+    }
+
     // Trampoline virtual methods.
-    MatrixX<T> value(const T& t) const override {
-      PYBIND11_OVERLOAD_PURE(MatrixX<T>, Trajectory<T>, value, t);
+
+    std::unique_ptr<Trajectory<T>> DoClone() const final {
+      // TODO(jwnimmer-tri) Rewrite cloning to use __deepcopy__ in lieu of
+      // Clone (or DoClone).
+      PYBIND11_OVERLOAD_PURE(
+          std::unique_ptr<Trajectory<T>>, Trajectory<T>, Clone);
     }
 
-    T start_time() const override {
-      PYBIND11_OVERLOAD_PURE(T, Trajectory<T>, start_time);
+    MatrixX<T> do_value(const T& t) const final {
+      PYBIND11_OVERLOAD_INT(MatrixX<T>, Trajectory<T>, "do_value", t);
+      WarnDeprecatedOverride("value");
+      PYBIND11_OVERLOAD_INT(MatrixX<T>, Trajectory<T>, "value", t);
+      // If the macro did not return, use default functionality.
+      return Base::do_value(t);
     }
 
-    T end_time() const override {
-      PYBIND11_OVERLOAD_PURE(T, Trajectory<T>, end_time);
-    }
-
-    Eigen::Index rows() const override {
-      PYBIND11_OVERLOAD_PURE(Eigen::Index, Trajectory<T>, rows);
-    }
-
-    Eigen::Index cols() const override {
-      PYBIND11_OVERLOAD_PURE(Eigen::Index, Trajectory<T>, cols);
-    }
-
-    bool do_has_derivative() const override {
+    bool do_has_derivative() const final {
       PYBIND11_OVERLOAD_INT(bool, Trajectory<T>, "do_has_derivative");
       // If the macro did not return, use default functionality.
       return Base::do_has_derivative();
     }
 
-    MatrixX<T> DoEvalDerivative(
-        const T& t, int derivative_order) const override {
+    MatrixX<T> DoEvalDerivative(const T& t, int derivative_order) const final {
       PYBIND11_OVERLOAD_INT(
           MatrixX<T>, Trajectory<T>, "DoEvalDerivative", t, derivative_order);
       // If the macro did not return, use default functionality.
@@ -208,16 +215,43 @@ struct Impl {
     }
 
     std::unique_ptr<Trajectory<T>> DoMakeDerivative(
-        int derivative_order) const override {
+        int derivative_order) const final {
       PYBIND11_OVERLOAD_INT(std::unique_ptr<Trajectory<T>>, Trajectory<T>,
           "DoMakeDerivative", derivative_order);
       // If the macro did not return, use default functionality.
       return Base::DoMakeDerivative(derivative_order);
     }
 
-    std::unique_ptr<Trajectory<T>> Clone() const override {
-      PYBIND11_OVERLOAD_PURE(
-          std::unique_ptr<Trajectory<T>>, Trajectory<T>, Clone);
+    T do_start_time() const final {
+      PYBIND11_OVERLOAD_INT(T, Trajectory<T>, "do_start_time");
+      WarnDeprecatedOverride("start_time");
+      PYBIND11_OVERLOAD_INT(T, Trajectory<T>, "start_time");
+      // If the macro did not return, use default functionality.
+      return Base::do_start_time();
+    }
+
+    T do_end_time() const final {
+      PYBIND11_OVERLOAD_INT(T, Trajectory<T>, "do_end_time");
+      WarnDeprecatedOverride("end_time");
+      PYBIND11_OVERLOAD_INT(T, Trajectory<T>, "end_time");
+      // If the macro did not return, use default functionality.
+      return Base::do_end_time();
+    }
+
+    Eigen::Index do_rows() const final {
+      PYBIND11_OVERLOAD_INT(Eigen::Index, Trajectory<T>, "do_rows");
+      WarnDeprecatedOverride("rows");
+      PYBIND11_OVERLOAD_INT(Eigen::Index, Trajectory<T>, "rows");
+      // If the macro did not return, use default functionality.
+      return Base::do_rows();
+    }
+
+    Eigen::Index do_cols() const final {
+      PYBIND11_OVERLOAD_INT(Eigen::Index, Trajectory<T>, "do_cols");
+      WarnDeprecatedOverride("cols");
+      PYBIND11_OVERLOAD_INT(Eigen::Index, Trajectory<T>, "cols");
+      // If the macro did not return, use default functionality.
+      return Base::do_cols();
     }
   };
 
@@ -250,6 +284,11 @@ struct Impl {
           .def("end_time", &Class::end_time, cls_doc.end_time.doc)
           .def("rows", &Class::rows, cls_doc.rows.doc)
           .def("cols", &Class::cols, cls_doc.cols.doc);
+      // This binds Clone() and __copy__ and __deepcopy__. For final subclasses
+      // of Trajectory that offer a public copy constructor, in their bindings
+      // we also call DefCopyAndDeepCopy to override __copy__ and __deepcopy__
+      // with a more efficient implementation.
+      DefClone(&cls);
     }
 
     {
@@ -296,7 +335,6 @@ struct Impl {
               py::arg("basis"), py::arg("control_points"), cls_doc.ctor.doc)
           .def(py::init<math::BsplineBasis<T>, std::vector<MatrixX<T>>>(),
               py::arg("basis"), py::arg("control_points"), cls_doc.ctor.doc)
-          .def("Clone", &Class::Clone, cls_doc.Clone.doc)
           .def("num_control_points", &Class::num_control_points,
               cls_doc.num_control_points.doc)
           .def("control_points", &Class::control_points,
@@ -328,8 +366,24 @@ struct Impl {
           m, "DerivativeTrajectory", param, cls_doc.doc);
       cls  // BR
           .def(py::init<const Trajectory<T>&, int>(), py::arg("nominal"),
-              py::arg("derivative_order") = 1, cls_doc.ctor.doc)
-          .def("Clone", &Class::Clone, cls_doc.Clone.doc);
+              py::arg("derivative_order") = 1, cls_doc.ctor.doc);
+      DefCopyAndDeepCopy(&cls);
+    }
+
+    {
+      using Class = FunctionHandleTrajectory<T>;
+      constexpr auto& cls_doc = doc.FunctionHandleTrajectory;
+      auto cls = DefineTemplateClassWithDefault<Class, Trajectory<T>>(
+          m, "FunctionHandleTrajectory", param, cls_doc.doc);
+      cls  // BR
+          .def(py::init<const std::function<MatrixX<T>(const T&)>&, int, int,
+                   double, double>(),
+              py::arg("func"), py::arg("rows"), py::arg("cols") = 1,
+              py::arg("start_time") = -std::numeric_limits<double>::infinity(),
+              py::arg("end_time") = std::numeric_limits<double>::infinity(),
+              cls_doc.ctor.doc)
+          .def("set_derivative", &Class::set_derivative, py::arg("func"),
+              cls_doc.set_derivative.doc);
       DefCopyAndDeepCopy(&cls);
     }
 
@@ -341,7 +395,6 @@ struct Impl {
       cls  // BR
           .def(py::init<const Trajectory<T>&, const Trajectory<T>&>(),
               py::arg("path"), py::arg("time_scaling"), cls_doc.ctor.doc)
-          .def("Clone", &Class::Clone, cls_doc.Clone.doc)
           .def("path", &Class::path, py_rvp::reference_internal,
               cls_doc.path.doc)
           .def("time_scaling", &Class::time_scaling, py_rvp::reference_internal,
@@ -393,7 +446,6 @@ struct Impl {
           .def(py::init<std::vector<Polynomial<T>> const&,
                    std::vector<T> const&>(),
               cls_doc.ctor.doc_2args_polynomials_breaks)
-          .def("Clone", &Class::Clone, cls_doc.Clone.doc)
           .def_static(
               "ZeroOrderHold",
               // This serves the same purpose as the C++
@@ -581,7 +633,39 @@ struct Impl {
           }),
               py::arg("segments"), cls_doc.ctor.doc)
           .def("segment", &Class::segment, py::arg("segment_index"),
-              py_rvp::reference_internal, cls_doc.segment.doc);
+              py_rvp::reference_internal, cls_doc.segment.doc)
+          .def_static(
+              "AlignAndConcatenate",
+              [](std::vector<const Trajectory<T>*> py_segments) {
+                std::vector<copyable_unique_ptr<Trajectory<T>>> segments;
+                segments.reserve(py_segments.size());
+                for (const Trajectory<T>* py_segment : py_segments) {
+                  segments.emplace_back(
+                      py_segment ? py_segment->Clone() : nullptr);
+                }
+                return CompositeTrajectory<T>::AlignAndConcatenate(segments);
+              },
+              py::arg("segments"), cls_doc.AlignAndConcatenate.doc);
+      DefCopyAndDeepCopy(&cls);
+    }
+
+    if constexpr (std::is_same_v<T, double>) {
+      using Class = ExponentialPlusPiecewisePolynomial<T>;
+      constexpr auto& cls_doc = doc.ExponentialPlusPiecewisePolynomial;
+      auto cls = DefineTemplateClassWithDefault<Class, PiecewiseTrajectory<T>>(
+          m, "ExponentialPlusPiecewisePolynomial", param, cls_doc.doc);
+      cls  // BR
+          .def(
+              py::init(
+                  [](const Eigen::MatrixX<T>& K, const Eigen::MatrixX<T>& A,
+                      const Eigen::MatrixX<T>& alpha,
+                      const PiecewisePolynomial<T>& piecewise_polynomial_part) {
+                    return Class(K, A, alpha, piecewise_polynomial_part);
+                  }),
+              py::arg("K"), py::arg("A"), py::arg("alpha"),
+              py::arg("piecewise_polynomial_part"), cls_doc.ctor.doc)
+          .def("shiftRight", &Class::shiftRight, py::arg("offset"),
+              cls_doc.shiftRight.doc);
       DefCopyAndDeepCopy(&cls);
     }
 
@@ -670,7 +754,6 @@ struct Impl {
           m, "StackedTrajectory", param, cls_doc.doc);
       cls  // BR
           .def(py::init<bool>(), py::arg("rowwise") = true, cls_doc.ctor.doc)
-          .def("Clone", &Class::Clone, cls_doc.Clone.doc)
           .def("Append",
               py::overload_cast<const Trajectory<T>&>(&Class::Append),
               /* N.B. We choose to omit any py::arg name here. */

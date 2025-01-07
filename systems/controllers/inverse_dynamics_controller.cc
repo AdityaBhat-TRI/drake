@@ -8,6 +8,7 @@
 #include "drake/systems/primitives/adder.h"
 #include "drake/systems/primitives/constant_vector_source.h"
 #include "drake/systems/primitives/demultiplexer.h"
+#include "drake/systems/primitives/sparse_matrix_gain.h"
 
 using drake::multibody::MultibodyPlant;
 
@@ -19,7 +20,7 @@ template <typename T>
 void InverseDynamicsController<T>::SetUp(
     std::unique_ptr<multibody::MultibodyPlant<T>> owned_plant,
     const VectorX<double>& kp, const VectorX<double>& ki,
-    const VectorX<double>& kd) {
+    const VectorX<double>& kd, const Context<T>* plant_context) {
   DRAKE_DEMAND(multibody_plant_for_control_->is_finalized());
 
   DiagramBuilder<T> builder;
@@ -27,11 +28,11 @@ void InverseDynamicsController<T>::SetUp(
   if (owned_plant) {
     inverse_dynamics = builder.template AddNamedSystem<InverseDynamics<T>>(
         "InverseDynamics", std::move(owned_plant),
-        InverseDynamics<T>::kInverseDynamics);
+        InverseDynamics<T>::kInverseDynamics, plant_context);
   } else {
     inverse_dynamics = builder.template AddNamedSystem<InverseDynamics<T>>(
         "InverseDynamics", multibody_plant_for_control_,
-        InverseDynamics<T>::kInverseDynamics);
+        InverseDynamics<T>::kInverseDynamics, plant_context);
   }
 
   const int num_positions = multibody_plant_for_control_->num_positions();
@@ -114,7 +115,16 @@ joints modeled with quaternions.)""", num_positions, num_velocities));
         builder.ExportInput(adder->get_input_port(1), "desired_acceleration");
   }
 
-  // Exposes inverse dynamics' output port.
+  // Add B⁻¹ to the diagram.
+  auto Binv = builder.template AddNamedSystem<SparseMatrixGain<T>>(
+      "B⁻¹", multibody_plant_for_control_->MakeActuationMatrixPseudoinverse());
+  builder.Connect(inverse_dynamics->get_output_port_generalized_force(),
+                  Binv->get_input_port());
+
+  // Expose the actuation output port.
+  actuation_ = builder.ExportOutput(Binv->get_output_port(), "actuation");
+
+  // Exposes the generalized force output port.
   generalized_force_ = builder.ExportOutput(
       inverse_dynamics->get_output_port_generalized_force(),
       "generalized_force");
@@ -135,20 +145,22 @@ template <typename T>
 InverseDynamicsController<T>::InverseDynamicsController(
     const MultibodyPlant<T>& plant, const VectorX<double>& kp,
     const VectorX<double>& ki, const VectorX<double>& kd,
-    bool has_reference_acceleration)
+    bool has_reference_acceleration,
+    const Context<T>* plant_context)
     : multibody_plant_for_control_(&plant),
       has_reference_acceleration_(has_reference_acceleration) {
-  SetUp(nullptr, kp, ki, kd);
+  SetUp(nullptr, kp, ki, kd, plant_context);
 }
 
 template <typename T>
 InverseDynamicsController<T>::InverseDynamicsController(
     std::unique_ptr<multibody::MultibodyPlant<T>> plant,
     const VectorX<double>& kp, const VectorX<double>& ki,
-    const VectorX<double>& kd, bool has_reference_acceleration)
+    const VectorX<double>& kd, bool has_reference_acceleration,
+    const Context<T>* plant_context)
     : multibody_plant_for_control_(plant.get()),
       has_reference_acceleration_(has_reference_acceleration) {
-  SetUp(std::move(plant), kp, ki, kd);
+  SetUp(std::move(plant), kp, ki, kd, plant_context);
 }
 
 template <typename T>
@@ -159,4 +171,4 @@ InverseDynamicsController<T>::~InverseDynamicsController() = default;
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::controllers::InverseDynamicsController)
+    class ::drake::systems::controllers::InverseDynamicsController);

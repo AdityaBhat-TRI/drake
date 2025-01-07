@@ -31,7 +31,7 @@ the zero-dimensional case.
 @ingroup geometry_optimization */
 class AffineBall final : public ConvexSet {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(AffineBall)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(AffineBall);
 
   /** Constructs a default (zero-dimensional, nonempty) set. */
   AffineBall();
@@ -118,11 +118,17 @@ class AffineBall final : public ConvexSet {
     CheckInvariants();
   }
 
+  /** Every AffineBall is bounded by construction.
+  @param parallelism Ignored -- no parallelization is used.
+  @note See @ref ConvexSet::IsBounded "parent class's documentation" for more
+  details. */
+  using ConvexSet::IsBounded;
+
  private:
   std::unique_ptr<ConvexSet> DoClone() const final;
 
   /* AffineBall can only represent bounded sets. */
-  std::optional<bool> DoIsBoundedShortcut() const final { return true; };
+  std::optional<bool> DoIsBoundedShortcut() const final;
 
   /* AffineBall can only represent nonempty sets. */
   bool DoIsEmpty() const final { return false; };
@@ -135,8 +141,8 @@ class AffineBall final : public ConvexSet {
     return center_;
   };
 
-  bool DoPointInSet(const Eigen::Ref<const Eigen::VectorXd>& x,
-                    double tol) const final;
+  std::optional<bool> DoPointInSetShortcut(
+      const Eigen::Ref<const Eigen::VectorXd>& x, double tol) const final;
 
   std::pair<VectorX<symbolic::Variable>,
             std::vector<solvers::Binding<solvers::Constraint>>>
@@ -162,6 +168,9 @@ class AffineBall final : public ConvexSet {
 
   std::pair<std::unique_ptr<Shape>, math::RigidTransformd> DoToShapeWithPose()
       const final;
+
+  std::unique_ptr<ConvexSet> DoAffineHullShortcut(
+      std::optional<double> tol) const final;
 
   void CheckInvariants() const;
 

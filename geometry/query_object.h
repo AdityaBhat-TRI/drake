@@ -172,13 +172,25 @@ class QueryObject {
   const math::RigidTransform<T>& GetPoseInWorld(GeometryId geometry_id) const;
 
   /** Reports the configuration of the deformable geometry indicated by
-   `geometry_id` relative to the world frame.
+   `deformable_geometry_id` relative to the world frame.
    @sa GetPoseInWorld().
-   @throws std::exception if the geometry `geometry_id` is not valid or is not
-   a deformable geometry.  */
+   @throws std::exception if the geometry `deformable_geometry_id` is not valid
+   or is not a deformable geometry.  */
   const VectorX<T>& GetConfigurationsInWorld(
       GeometryId deformable_geometry_id) const;
 
+  // TODO(xuchenhan-tri): This should cross reference the concept of driven
+  // meshes when it is nicely written up somewhere (e.g., in the SceneGraph
+  // documentation).
+  /** Reports the configurations of the driven meshes associated with the given
+   role for the deformable geometry indicated by `deformable_geometry_id`
+   relative to the world frame if the deformable geometry has that role.
+   @throws std::exception if the geometry associated with
+   `deformable_geometry_id` is not a registered deformable geometry with
+   the given role.
+   @experimental */
+  std::vector<VectorX<T>> GetDrivenMeshConfigurationsInWorld(
+      GeometryId deformable_geometry_id, Role role) const;
   //@}
 
   /**
@@ -320,16 +332,21 @@ class QueryObject {
          document, for example, an appendix in Hydroelastic User Guide
          when it's ready. -->
 
-     - ᵃ For compliant Mesh, please specify a tetrahedral mesh
-         in a VTK file in Mesh(filename). This external working
-         <a href="https://docs.google.com/document/d/1VZtVsxIjOLKvgQ8SNSrF6PtWuPW5z9PP7-dQuxfmqpc/edit?usp=sharing">
-         document</a> provides guidance how to generate a tetrahedral mesh
-         in a VTK file from a surface mesh in an OBJ file.
+     - ᵃ The exact representation of a compliant mesh depends on the type of
+         mesh file it references:
+           - .obj: the convex hull of the mesh will be used (as if it were
+             declared to be a Convex shape).
+           - .vtk: the tetrahedral mesh will be used directly. This external
+             working
+             <a href="https://docs.google.com/document/d/1VZtVsxIjOLKvgQ8SNSrF6PtWuPW5z9PP7-dQuxfmqpc/edit?usp=sharing">
+             document</a> provides guidance how to generate a tetrahedral mesh
+             in a VTK file from a surface mesh in an OBJ file.
      - ᵇ For rigid Mesh, please specify a surface mesh in an OBJ file in
          Mesh(filename). A tetrahedral mesh in a VTK file can also be
          specified.
-     - ᶜ For both compliant Convex and rigid Convex, please specify a surface
-         mesh in an OBJ file in Convex(filename).
+     - ᶜ The Convex shape can reference either an .obj or a .vtk tetrahedral
+         mesh. In both cases, its convex hull will be used to define the
+         hydroelastic representation.
 
      - We do not support contact between two rigid geometries. One geometry
        *must* be compliant, and the other could be rigid or compliant. If
@@ -640,7 +657,9 @@ class QueryObject {
 
    @returns The signed distance (and supporting data) for all unfiltered
             geometry pairs whose distance is less than or equal to
-            `max_distance`.
+            `max_distance`. The ordering of the results is guaranteed to be
+            consistent -- for fixed geometry poses, the results will remain the
+            same.
    @throws std::exception as indicated in the table above.
    @warning For Mesh shapes, their convex hulls are used in this query. It is
             *not* computationally efficient or particularly accurate.  */
@@ -677,7 +696,6 @@ class QueryObject {
   // TODO(DamrongGuoy): Improve and refactor documentation of
   // ComputeSignedDistanceToPoint(). Move the common sections into Signed
   // Distance Queries. Update documentation as we add more functionality.
-  // Right now it only supports spheres and boxes.
   /**
    Computes the signed distances and gradients to a query point from each
    geometry in the scene.
@@ -713,8 +731,8 @@ class QueryObject {
    as described, with the point being represented as a zero-radius sphere.
 
    |   Scalar   |   %Box  | %Capsule | %Convex | %Cylinder | %Ellipsoid | %HalfSpace |  %Mesh  | %Sphere |
-   | :----: | :-----: | :------: | :-----: | :-------: | :--------: | :--------: | :-----: | :-----: |
-   |   double   |  2e-15  |   4e-15  |    ᵃ    |   3e-15   |    3e-5ᵇ   |    5e-15   |    ᵃ    |  4e-15  |
+   | :--------: | :-----: | :------: | :-----: | :-------: | :--------: | :--------: | :-----: | :-----: |
+   |   double   |  2e-15  |   4e-15  |  5e-15  |   3e-15   |    3e-5ᵇ   |    5e-15   | 5e-15ᶜ  |  4e-15  |
    | AutoDiffXd |  1e-15  |   4e-15  |    ᵃ    |     ᵃ     |      ᵃ     |    5e-15   |    ᵃ    |  3e-15  |
    | Expression |   ᵃ     |    ᵃ     |    ᵃ    |     ᵃ     |      ᵃ     |      ᵃ     |    ᵃ    |    ᵃ    |
    __*Table 8*__: Worst observed error (in m) for 2mm penetration/separation
@@ -728,6 +746,34 @@ class QueryObject {
        the projection of the query point on the ellipsoid; the closer that point
        is to the high curvature area, the bigger the effect. It is not
        immediately clear how much worse the answer will get.
+   - ᶜ Only supports OBJ and tetrahedral VTK meshes. Unsupported meshes are
+       simply ignored; no results are reported for that geometry. For OBJ meshes
+       the surface mesh must satisfy specific requirements (see below). Unlike
+       the other Shapes, witness points and gradients can be discontinuous on a
+       mesh's exterior if it is non-convex.
+
+   @pre The %Mesh of a triangular surface mesh must be a closed manifold
+   without duplicate vertices or self-intersection, and every triangle's face
+   winding gives an outward-pointing face normal.  Drake does not currently
+   validate the input mesh with respect to these properties. Instead, it does a
+   good-faith computation assuming the properties, possibly returning incorrect
+   results. Non-compliant meshes will introduce regions in which the query
+   point will report the wrong sign (and, therefore, the wrong gradient) due
+   to a misclassification of being inside or outside. This leads to
+   discontinuities in the distance field across the boundaries of these
+   regions; the distance sign will flip while the magnitude of the distance
+   value is arbitrarily far away from zero. For open meshes, the same principle
+   holds. The open mesh, which has no true concept of "inside", will
+   nevertheless report some query points as being inside.
+
+   @pre The %Mesh of a tetrahedral volume mesh has positive-volume tetrahedra,
+   no duplicate vertices, no self-intersection, and any two tetrahedra
+   intersect in a common triangular face, edge, or vertex or not at all.
+   A "tetrahedron soup" is, in general, non-compliant to this condition.
+   Violating meshes will introduce areas inside the volumes that are
+   incorrectly treated as boundary surfaces. The query points near such
+   problematic areas will report the wrong nearest points, distances,
+   and gradients.
 
    @note For a sphere G, the signed distance function φᵢ(p) has an undefined
    gradient vector at the center of the sphere--every point on the sphere's
@@ -766,7 +812,13 @@ class QueryObject {
    @retval signed_distances   A vector populated with per-object signed distance
                               values (and supporting data) for every supported
                               geometry as shown in the table. See
-                              SignedDistanceToPoint. */
+                              SignedDistanceToPoint. The ordering of the
+                              results is guaranteed to be consistent -- for
+                              fixed geometry poses, the results will remain the
+                              same.
+
+   @throws std::exception if there are meshes with extremely sharp features
+   where the calculation of feature normals become unstable. */
   std::vector<SignedDistanceToPoint<T>> ComputeSignedDistanceToPoint(
       const Vector3<T>& p_WQ,
       const double threshold = std::numeric_limits<double>::infinity()) const;

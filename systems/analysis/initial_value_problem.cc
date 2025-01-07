@@ -91,10 +91,10 @@ template <typename T>
 const double InitialValueProblem<T>::kDefaultAccuracy = 1e-4;
 
 template <typename T>
-const T InitialValueProblem<T>::kInitialStepSize = static_cast<T>(1e-4);
+const double InitialValueProblem<T>::kInitialStepSize = 1e-4;
 
 template <typename T>
-const T InitialValueProblem<T>::kMaxStepSize = static_cast<T>(1e-1);
+const double InitialValueProblem<T>::kMaxStepSize = 1e-1;
 
 template <typename T>
 InitialValueProblem<T>::InitialValueProblem(
@@ -191,4 +191,4 @@ std::unique_ptr<DenseOutput<T>> InitialValueProblem<T>::DenseSolve(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class drake::systems::InitialValueProblem)
+    class drake::systems::InitialValueProblem);

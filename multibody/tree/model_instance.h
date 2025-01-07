@@ -18,7 +18,7 @@ namespace multibody {
 /// @anchor model_instance
 /// Model instance information for multibody trees.
 ///
-/// A MultiBodyTree is composed of a number of MultibodyElement items.  In
+/// A MultibodyTree is composed of a number of MultibodyElement items.  In
 /// more complex trees, these items will be loaded from multiple models
 /// (e.g. robot arm, attached gripper, free bodies being manipulated).  Each
 /// model may have a different controller or observer, so the ability to view
@@ -58,7 +58,7 @@ namespace internal {
 template <typename T>
 class ModelInstance final : public MultibodyElement<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ModelInstance)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ModelInstance);
 
   // Creates a new instance with the given values. The name must not be empty.
   ModelInstance(ModelInstanceIndex index, std::string name);
@@ -109,14 +109,14 @@ class ModelInstance final : public MultibodyElement<T> {
   std::vector<JointIndex> GetActuatedJointIndices() const;
 
   // Returns the actuation for `this` model instance extracted from `u`.
-  // @param[in] u Actuation for the full plant model, indexed by
-  // JointActuatorIndex.
+  // @param[in] u Actuation for the full plant model, ordered by monotonically
+  // increasing JointActuatorIndex (see
+  // MultibodyPlant::get_actuation_input_port()).
   // @returns the per model instance actuation, order by monotonically
   // increasing JointActuatorIndex within this model instance.
   // @throws std::exception if `u` is not of size
   //         MultibodyTree::num_actuators().
-  VectorX<T> GetActuationFromArray(
-      const Eigen::Ref<const VectorX<T>>& u) const;
+  VectorX<T> GetActuationFromArray(const Eigen::Ref<const VectorX<T>>& u) const;
 
   // Given the actuation values `u_instance` for all actuators in `this` model
   // instance, updates the portion of the actuation vector `u` corresponding to
@@ -124,37 +124,35 @@ class ModelInstance final : public MultibodyElement<T> {
   // @param[in] u_instance Actuation values for this model instance. It must be
   //   of size equal to the number of degrees of freedom of all of the actuated
   //   joints in this model instance. It is ordered by monotonically increasing
-  //   JointActuatorIndex within this model instance.
+  //   JointActuatorIndex within this model instance (see
+  //   MultibodyPlant::get_actuation_input_port()).
   // @param[in,out] u Actuation values for the entire plant model to which
-  //   `this` actuator belongs, indexed by JointActuatorIndex. It must be of
-  //   size equal to the number of degrees of freedom of all of the actuated
-  //   joints in the entire MultibodyTree model. Only values corresponding to
-  //   this model instance are updated.
+  //   `this` actuator belongs (ordered by monotonically increasing
+  //   JointActuatorIndex). It must be of size equal to the number of degrees of
+  //   freedom of all of the actuated joints in the entire MultibodyTree model.
+  //   Only values corresponding to this model instance are updated.
   // @throws std::exception if `u_instance` is not of size equal to the number
   //   of degrees of freedom of all of the actuated joints in this model or `u`
   //   is not of size equal to the number of degrees of freedom of all of the
   //   actuated joints in the entire MultibodyTree model to which `this`
   //   actuator belongs to.
-  void SetActuationInArray(
-      const Eigen::Ref<const VectorX<T>>& u_instance,
-      EigenPtr<VectorX<T>> u) const;
+  void SetActuationInArray(const Eigen::Ref<const VectorX<T>>& u_instance,
+                           EigenPtr<VectorX<T>> u) const;
 
   // Returns an Eigen vector of the generalized positions
   // for `this` model instance from a vector `q` of generalized
   // positions for the entire MultibodyTree model.
   // @throws std::exception if `q` is not of size
   //         MultibodyTree::num_positions().
-  VectorX<T> GetPositionsFromArray(
-      const Eigen::Ref<const VectorX<T>>& q) const;
+  VectorX<T> GetPositionsFromArray(const Eigen::Ref<const VectorX<T>>& q) const;
 
   // (Advanced) Takes an output vector q_out and populates it with the
   // generalized positions for `this` model instance from a vector `q` of
   // generalized positions for the entire MultibodyTree model.
   // @throws std::exception if `q` is not of size
   //         MultibodyTree::num_positions().
-  void GetPositionsFromArray(
-      const Eigen::Ref<const VectorX<T>>& q,
-      EigenPtr<VectorX<T>> q_out) const;
+  void GetPositionsFromArray(const Eigen::Ref<const VectorX<T>>& q,
+                             EigenPtr<VectorX<T>> q_out) const;
 
   // Sets the vector of generalized positions for `this` model instance in
   // the relevant locations of an array that corresponds to the positions for
@@ -165,9 +163,8 @@ class ModelInstance final : public MultibodyElement<T> {
   // @throws std::exception if `q` is not of size
   //         MultibodyTree::num_positions() or `q_instance` is not of size
   //         num_positions().
-  void SetPositionsInArray(
-      const Eigen::Ref<const VectorX <T>>& q_instance,
-      EigenPtr<VectorX<T>> q) const;
+  void SetPositionsInArray(const Eigen::Ref<const VectorX<T>>& q_instance,
+                           EigenPtr<VectorX<T>> q) const;
 
   // Returns an Eigen vector of the generalized velocities
   // for `this` mobilizer from a vector `v` of generalized velocities for
@@ -182,9 +179,8 @@ class ModelInstance final : public MultibodyElement<T> {
   // generalized velocities for the entire MultibodyTree model.
   // @throws std::exception if `v` is not of size
   //         MultibodyTree::num_velocities().
-  void GetVelocitiesFromArray(
-      const Eigen::Ref<const VectorX<T>>& v,
-      EigenPtr<VectorX<T>> v_out) const;
+  void GetVelocitiesFromArray(const Eigen::Ref<const VectorX<T>>& v,
+                              EigenPtr<VectorX<T>> v_out) const;
 
   // Sets the vector of generalized velocities for `this` model instance in
   // the relevant locations of an array corresponding to the velocities for the
@@ -195,9 +191,8 @@ class ModelInstance final : public MultibodyElement<T> {
   // @throws std::exception if `v` is not of size
   //         MultibodyTree::num_velocities() or `v_instance` is not of size
   //         num_velocities().
-  void SetVelocitiesInArray(
-      const Eigen::Ref<const VectorX<T>>& v_instance,
-      EigenPtr<VectorX<T>> v) const;
+  void SetVelocitiesInArray(const Eigen::Ref<const VectorX<T>>& v_instance,
+                            EigenPtr<VectorX<T>> v) const;
 
  private:
   void DoSetTopology(const MultibodyTreeTopology&) final {}
@@ -217,4 +212,4 @@ class ModelInstance final : public MultibodyElement<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::internal::ModelInstance)
+    class ::drake::multibody::internal::ModelInstance);

@@ -8,7 +8,6 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/autodiff.h"
-#include "drake/common/find_resource.h"
 #include "drake/math/rigid_transform.h"
 #include "drake/math/roll_pitch_yaw.h"
 #include "drake/math/rotation_matrix.h"
@@ -34,17 +33,14 @@ class KukaIiwaModelTests : public ::testing::Test {
  public:
   // Creates MultibodyTree for a KUKA Iiwa robot arm.
   void SetUp() override {
-    const std::string kArmSdfPath = FindResourceOrThrow(
-        "drake/manipulation/models/iiwa_description/sdf/"
-        "iiwa14_no_collision.sdf");
-
     // Create a model of a Kuka arm. Notice we do not weld the robot's base to
     // the world and therefore the model is free floating in space. This makes
     // for a more interesting setup to test the computation of Jacobians with
     // respect to q̇ (time-derivative of generalized positions).
     plant_ = std::make_unique<MultibodyPlant<double>>(0.0);
     Parser parser(plant_.get());
-    parser.AddModels(kArmSdfPath);
+    parser.AddModelsFromUrl(
+        "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf");
     // Add a frame H with a fixed pose X_EH in the end effector frame E.
     end_effector_link_ = &plant_->GetBodyByName("iiwa_link_7");
     frame_H_ = &plant_->AddFrame(std::make_unique<FixedOffsetFrame<double>>(
@@ -82,20 +78,22 @@ class KukaIiwaModelTests : public ::testing::Test {
     }
   }
 
-  // Sets the state of the joints according to x_joints. The pose and spatial
-  // velocity of the base is set arbitrarily to a non-identity pose and non-zero
-  // spatial velocity.
+  // Sets the state of the revolute joints according to x_joints. The pose and
+  // spatial velocity of the base is set arbitrarily to a non-identity pose and
+  // non-zero spatial velocity.
   void SetState(const VectorX<double>& x_joints) {
-    EXPECT_EQ(plant_->num_joints(), kNumJoints);
-    // The last joint is the free body's joint so we skip it.
-    for (JointIndex joint_index(0); joint_index < kNumJoints - 1;
-         ++joint_index) {
+    EXPECT_EQ(plant_->num_joints(), kNumRevoluteJoints + kNumFloatingJoints);
+    for (JointIndex joint_index : plant_->GetJointIndices()) {
+      // Skip the floating joint.
+      if (plant_->get_joint(joint_index).num_velocities() != 1) {
+        continue;
+      }
       const RevoluteJoint<double>& joint =
           dynamic_cast<const RevoluteJoint<double>&>(
               plant_->get_joint(joint_index));
-      joint.set_angle(context_.get(), x_joints[joint_index]);
+      joint.set_angle(context_.get(), x_joints[joint.ordinal()]);
       joint.set_angular_rate(context_.get(),
-                             x_joints[kNumJoints + joint_index - 1]);
+                             x_joints[kNumRevoluteJoints + joint.ordinal()]);
     }
 
     // Set an arbitrary (though non-identity) pose of the floating base link.
@@ -114,7 +112,7 @@ class KukaIiwaModelTests : public ::testing::Test {
   // Get an arm state associated with an arbitrary configuration that avoids
   // in-plane motion and in which joint angles and rates are non-zero.
   VectorX<double> GetArbitraryJointAnglesAndRates() {
-    VectorX<double> x(2 * (kNumJoints - 1));
+    VectorX<double> x(2 * kNumRevoluteJoints);
 
     // These joint angles avoid in-plane motion, but are otherwise arbitrary.
     const double q30 = M_PI / 6, q60 = M_PI / 3;
@@ -140,7 +138,8 @@ class KukaIiwaModelTests : public ::testing::Test {
 
  protected:
   // Problem sizes.
-  const int kNumJoints = 8;
+  const int kNumRevoluteJoints = 7;
+  const int kNumFloatingJoints = 1;
   const int kNumPositions = 14;
   const int kNumVelocities = 13;
 

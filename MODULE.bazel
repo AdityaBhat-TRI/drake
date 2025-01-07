@@ -1,0 +1,29 @@
+# This file marks a workspace root for the Bazel build system.
+# See `https://bazel.build/`.
+
+# This file lists Drake's external dependencies as known to bzlmod. It is used
+# in concert with WORKSPACE.bzlmod (which has the workspace-style externals).
+
+module(name = "drake")
+
+bazel_dep(name = "apple_support", version = "1.17.1", repo_name = "build_bazel_apple_support")  # noqa
+bazel_dep(name = "bazel_features", version = "1.22.0")
+bazel_dep(name = "bazel_skylib", version = "1.7.1")
+bazel_dep(name = "platforms", version = "0.0.10")
+bazel_dep(name = "rules_cc", version = "0.0.17")
+bazel_dep(name = "rules_java", version = "8.6.1")
+bazel_dep(name = "rules_license", version = "1.0.0")
+bazel_dep(name = "rules_python", version = "0.40.0")
+bazel_dep(name = "rules_rust", version = "0.56.0")
+bazel_dep(name = "rules_shell", version = "0.3.0")
+
+cc_configure = use_extension(
+    "@rules_cc//cc:extensions.bzl",
+    "cc_configure_extension",
+)
+use_repo(cc_configure, "local_config_cc")
+
+# TODO(#20731) Move all of our dependencies from WORKSPACE.bzlmod into this
+# file, so that downstream projects can consume Drake exclusively via bzlmod
+# (and so that we can delete our WORKSPACE files prior to Bazel 9 which drops
+# suppose for it).

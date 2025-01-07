@@ -1,22 +1,17 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 load("//tools/install:install.bzl", "install", "install_files")
-load(
-    "//tools/skylark:pybind.bzl",
-    "drake_pybind_library",
-    "get_drake_py_installs",
-    "get_pybind_package_info",
-)
 load(
     "//tools/skylark:drake_py.bzl",
     "drake_py_binary",
     "drake_py_library",
     "drake_py_unittest",
 )
-load("@python//:version.bzl", "PYTHON_SITE_PACKAGES_RELPATH")
 load(
-    "//tools/workspace:cmake_configure_file.bzl",
-    "cmake_configure_file",
+    "//tools/skylark:pybind.bzl",
+    "drake_pybind_library",
+    "get_drake_py_installs",
+    "get_pybind_package_info",
 )
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 
 package(default_visibility = [
     "//bindings/pydrake:__subpackages__",
@@ -49,7 +44,6 @@ drake_pybind_library(
         "//bindings/pydrake/systems",
         "//bindings/pydrake/geometry",
         "//bindings/pydrake:lcm_py",
-        "//lcmtypes:lcmtypes_drake_py",
     ],
     py_srcs = [
         "meldis.py",
@@ -90,24 +84,6 @@ drake_py_library(
     name = "_lcm_image_array_viewer_py",
     srcs = ["_lcm_image_array_viewer.py"],
     deps = [":visualization"],
-)
-
-cmake_configure_file(
-    name = "generate_run_installed_meldis",
-    src = "run_installed_meldis.py.in",
-    out = "run_installed_meldis.py",
-    defines = [
-        "PYTHON_SITE_PACKAGES_RELPATH=" + PYTHON_SITE_PACKAGES_RELPATH,
-    ],
-)
-
-cmake_configure_file(
-    name = "generate_run_installed_model_visualizer",
-    src = "run_installed_model_visualizer.py.in",
-    out = "run_installed_model_visualizer.py",
-    defines = [
-        "PYTHON_SITE_PACKAGES_RELPATH=" + PYTHON_SITE_PACKAGES_RELPATH,
-    ],
 )
 
 install_files(
@@ -170,9 +146,12 @@ drake_py_unittest(
     name = "model_visualizer_test",
     timeout = "moderate",
     data = [
+        "test/massless_robot.urdf",
         ":model_visualizer",
         "//manipulation/util:test_models",
         "//multibody/benchmarks/acrobot:models",
+        "//multibody/parsing:test_models",
+        "//planning/test_utilities:collision_ground_plane.sdf",
     ],
     deps = [
         ":model_visualizer",
@@ -254,8 +233,8 @@ drake_py_unittest(
 
 add_lint_tests_pydrake(
     python_lint_extra_srcs = [
-        "run_installed_meldis.py.in",
-        "run_installed_model_visualizer.py.in",
+        "run_installed_meldis.py",
+        "run_installed_model_visualizer.py",
         "test/visualization_install_tests.py",
     ],
 )

@@ -86,15 +86,11 @@ the main body of the document:
 * Use exactly the same wording for the boilerplate items:
   * Every dependency upgrade line should be "Upgrade libfoobar to latest
     release 1.2.3" or "Upgrade funrepo to latest commit".
-  * Dependencies should be referred to by their workspace name.
+  * Dependencies should be referred to by their ``workspace`` name.
   * Only one dependency change per line. Even if both meshcat and meshcat-python
     were upgraded in the same pull request, they each should get their own
     line in the release notes.
 
-* Some features under development (eg, deformables as of this writing) may
-  have no-release-notes policies, as their APIs although public are not yet
-  fully supported.  Be sure to take note of which these are, or ask on
-  `#platform_review` slack.
 * Keep all bullet points to one line.
   * Using hard linebreaks to stay under 80 columns makes the bullet lists hard
     to maintain over time.
@@ -110,12 +106,12 @@ the main body of the document:
       has nothing still running (modulo the ``*-coverage`` builds, which we can
       ignore)
    3. Open the latest builds from the following builds:
-      1. <https://drake-jenkins.csail.mit.edu/view/Packaging/job/linux-jammy-unprovisioned-gcc-bazel-nightly-packaging/>
-      2. <https://drake-jenkins.csail.mit.edu/view/Packaging/job/mac-x86-monterey-unprovisioned-clang-bazel-nightly-packaging/>
-      3. <https://drake-jenkins.csail.mit.edu/view/Packaging/job/mac-arm-ventura-unprovisioned-clang-bazel-nightly-packaging/>
+      1. <https://drake-jenkins.csail.mit.edu/view/Packaging/job/linux-jammy-unprovisioned-gcc-cmake-nightly-packaging/>
+      2. <https://drake-jenkins.csail.mit.edu/view/Packaging/job/linux-noble-unprovisioned-gcc-cmake-nightly-packaging/>
+      3. <https://drake-jenkins.csail.mit.edu/view/Packaging/job/mac-arm-sonoma-unprovisioned-clang-cmake-nightly-packaging/>
    4. Check the logs for those packaging builds and find the URLs they posted
       to (open the latest build, go to "View as plain text", and search for
-      ``drake/nightly/drake-20``), and find the date.  It will be ``YYYYMMDD``
+      ``drake/nightly/drake-0.0.20``), and find the date.  It will be ``YYYYMMDD``
       with today's date (they kick off after midnight).  All of the builds
       should have the same date. If not, wait until the following night.
    5. Use the
@@ -125,25 +121,24 @@ the main body of the document:
       source code:
       [download_release_candidate.py](https://github.com/RobotLocomotion/drake/blob/master/tools/release_engineering/download_release_candidate.py).)
 2. Launch the staging builds for that git commit sha:
-   1. Open the following seven Jenkins jobs (e.g., each in its own
-      new browser tab):
+   1. Open the following Jenkins jobs (e.g., each in its own
+      new window, so you can copy-and-paste sha1 and version easily):
       - [Linux Wheel Staging](https://drake-jenkins.csail.mit.edu/view/Staging/job/linux-jammy-unprovisioned-gcc-wheel-staging-release/)
-      - [macOS x86 Wheel Staging](https://drake-jenkins.csail.mit.edu/view/Staging/job/mac-x86-monterey-unprovisioned-clang-wheel-staging-release/)
-      - [macOS arm Wheel Staging](https://drake-jenkins.csail.mit.edu/view/Staging/job/mac-arm-ventura-unprovisioned-clang-wheel-staging-release/)
-      - [Jammy Packaging Staging](https://drake-jenkins.csail.mit.edu/view/Staging/job/linux-jammy-unprovisioned-gcc-bazel-staging-packaging/)
-      - [macOS x86 Packaging Staging](https://drake-jenkins.csail.mit.edu/view/Staging/job/mac-x86-monterey-unprovisioned-clang-bazel-staging-packaging/)
-      - [macOS arm Packaging Staging](https://drake-jenkins.csail.mit.edu/view/Staging/job/mac-arm-ventura-unprovisioned-clang-bazel-staging-packaging/)
+      - [macOS arm Wheel Staging](https://drake-jenkins.csail.mit.edu/view/Staging/job/mac-arm-sonoma-unprovisioned-clang-wheel-staging-release/)
+      - [Jammy Packaging Staging](https://drake-jenkins.csail.mit.edu/view/Staging/job/linux-jammy-unprovisioned-gcc-cmake-staging-packaging/)
+      - [Noble Packaging Staging](https://drake-jenkins.csail.mit.edu/view/Staging/job/linux-noble-unprovisioned-gcc-cmake-staging-packaging/)
+      - [macOS arm Packaging Staging](https://drake-jenkins.csail.mit.edu/view/Staging/job/mac-arm-sonoma-unprovisioned-clang-cmake-staging-packaging/)
    2. In the upper right, click "log in" (unless you're already logged in). This
       will use your GitHub credentials.
    3. Click "Build with Parameters".
-   4. Change "sha1" to the full **git sha** corresponding to ``v1.N.0`` and
-      "release_version" to ``1.N.0`` (no "v").
+   4. Change "sha1" (not "ci_sha1") to the full **git sha** corresponding to 
+      ``v1.N.0`` and "release_version" to ``1.N.0`` (no "v").
       - If you mistakenly provide the "v" in "release_version", your build will
         appear to work, but actually fail 5-6 minutes later.
    5. Click "Build"; each build will take around an hour, give or take.
    6. Wait for all staging jobs to succeed.  It's OK to work on release notes
       finishing touches in the meantime, but do not merge the release notes nor
-      tag the release until all seven builds have succeeded.
+      tag the release until all five builds have succeeded.
 3. Update the release notes to have the ``YYYY-MM-DD`` we choose.
    1. There is a dummy date 2099-12-31 nearby that should likewise be changed.
    2. Make sure that the nightly build git sha from the prior steps matches the
@@ -174,12 +169,11 @@ the main body of the document:
       appropriate edits as follows:
       * The version number
    5. Click the box labeled "Attach binaries by dropping them here or selecting
-      them." and then choose for upload the 39 release files from
+      them." and then choose for upload the **30** release files from
       ``/tmp/drake-release/v1.N.0/...``:
-      - 12: 4 `.tar.gz` + 8 checksums
+      - 9: 3 `.tar.gz` + 6 checksums
       - 6: 2 `.deb` + 4 checksums
       - 9: 3 linux `.whl` + 6 checksums
-      - 6: 2 macOS x86 `.whl` + 4 checksums
       - 6: 2 macOS arm `.whl` + 4 checksums
       * Note that on Jammy with `snap` provided Firefox, drag-and-drop from
         Nautilus will fail, and drop all of your release page inputs typed so
@@ -232,14 +226,13 @@ the email address associated with your github account.
    tutorials deployment now (so that others are aware of the potentially-
    disruptive changes).
 2. Open the tutorials [Dockerfile](https://deepnote.com/workspace/Drake-0b3b2c53-a7ad-441b-80f8-bf8350752305/project/Tutorials-2b4fc509-aef2-417d-a40d-6071dfed9199/Dockerfile):
-   1. Edit the first line to refer to the YYYYMMDD for this release.
+   1. Edit the first line to refer to the YYYYMMDD for this release (login 
+      with your github account; otherwise, the file is read-only).
       1. For reference, the typical content is thus:
          ```
-         FROM robotlocomotion/drake:jammy-20230518
+         FROM robotlocomotion/drake:jammy-20241114
 
-         RUN apt-get -q update && apt-get -q install -y --no-install-recommends nginx-light xvfb && apt-get -q clean
-
-         ENV DISPLAY=:1
+         RUN apt-get -q update && apt-get -q install -y --no-install-recommends nginx-light && apt-get -q clean
 
          ENV PATH="/opt/drake/bin:${PATH}" \
            PYTHONPATH="/opt/drake/lib/python3.10/site-packages:${PYTHONPATH}"
@@ -263,9 +256,7 @@ the email address associated with your github account.
    ```
    %%bash
    /opt/drake/share/drake/setup/deepnote/install_nginx
-   /opt/drake/share/drake/setup/deepnote/install_xvfb
    ```
-   In case the display server is not working later on, this might be a good place to double-check.
    For Jammy we also needed to add ``cd /work`` atop the stanza that checks for
    ``requirements.txt`` to get it working again.
 5. Copy the updated tutorials from the pinned Dockerfile release
@@ -296,12 +287,15 @@ the email address associated with your github account.
       ... etc.):
       1. In the left-hand panel of your screen, take note that each notebook
          appears in two places -- in "NOTEBOOKS" near the top and in "FILES"
-         near the bottom. The "NOTEBOOKS" is the old copy; the "FILES" is the
-         new copy. Our goal is to replace the old copy with the new.
+         near the bottom. The "NOTEBOOKS" is the older copy (from the prior
+         release); the "FILES" is the new copy (from this release). Our goal
+         is to replace the old copy with the new.
       2. Scroll down to the "FILES" and choose the top-most name. Right click on
          it and select "Move to notebooks".
          Be patient because the web interface could be slow, and there might be
-         delay between copying and deleting the file.
+         delay while copying the file.
+         Note that even though the button says "Move", it actually only *copies*
+         the file; it does not delete the item from "FILES".
       3. Because a notebook of that name already existed in "NOTEBOOKS" (the old
          copy), the moved notebook will be renamed with a ``-2`` suffix.
       4. Scroll up to "NOTEBOOKS". Right click on the old copy (without ``-2``)
@@ -320,9 +314,8 @@ the email address associated with your github account.
       9. Leave the notebook output intact (do not clear the outputs). We want
          users to be able to read the outputs on their own, without necessarily
          running the notebook themselves.
-      10. The moved notebook no longer appears in "FILES", so you can always
-          use the top-most ``*.ipynb`` in "FILES" as your checklist for which
-          one to tackle next.
+      10. Go back to "FILES" and right-click then "Delete" on the notebook you
+          just copied; it should still be the top-most ``*.ipynb`` in "FILES".
 6. On the left side, click "Environment" then "Stop Machine", as a
    courtesy. (It will time out on its own within the hour, but we might as
    well save a few nanograms of CO2 where we can.)

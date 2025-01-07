@@ -1,11 +1,13 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "drake/common/diagnostic_policy.h"
+#include "drake/multibody/parsing/collision_filter_groups.h"
 #include "drake/multibody/parsing/package_map.h"
 #include "drake/multibody/plant/multibody_plant.h"
 #include "drake/multibody/tree/multibody_tree_indexes.h"
@@ -14,6 +16,7 @@ namespace drake {
 namespace multibody {
 
 namespace internal {
+class CollisionFilterGroupResolver;
 class CompositeParse;
 }  // namespace internal
 
@@ -128,7 +131,7 @@ class CompositeParse;
 /// this feature.
 class Parser final {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Parser)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Parser);
 
   /// Creates a Parser that adds models to the given plant and (optionally)
   /// scene_graph.
@@ -171,9 +174,15 @@ class Parser final {
   ///   when empty, no scoping will be added.
   Parser(MultibodyPlant<double>* plant, std::string_view model_name_prefix);
 
+  ~Parser();
+
   /// Gets a mutable reference to the plant that will be modified by this
   /// parser.
   MultibodyPlant<double>& plant() { return *plant_; }
+
+  /// Gets a mutable pointer to the SceneGraph that will be modified by this
+  /// parser, or nullptr if this parser does not have a SceneGraph.
+  geometry::SceneGraph<double>* scene_graph();
 
   /// Gets a mutable reference to the PackageMap used by this parser.
   PackageMap& package_map() { return package_map_; }
@@ -189,6 +198,17 @@ class Parser final {
   /// Get the current state of auto-renaming.
   /// @see the Parser class documentation for more detail.
   bool GetAutoRenaming() const { return enable_auto_rename_; }
+
+  /// Gets the accumulated set of collision filter definitions seen by this
+  /// parser.
+  ///
+  /// There are two kinds of names in the returned data: group names and body
+  /// names. Both may occur within scoped names indicating the model instance
+  /// where they are defined. Note that the model instance names used in the
+  /// returned data will reflect the current names in plant() at the time this
+  /// accessor is called (see MultibodyPlant::RenameModelInstance()), but the
+  /// local group and body names will be the names seen during parsing.
+  CollisionFilterGroups GetCollisionFilterGroups() const;
 
   /// Parses the input file named in @p file_name and adds all of its model(s)
   /// to @p plant.
@@ -229,14 +249,19 @@ class Parser final {
  private:
   friend class internal::CompositeParse;
 
+  // This is called back from CompositeParse::Finish().
+  void ResolveCollisionFilterGroupsFromCompositeParse(
+      internal::CollisionFilterGroupResolver* resolver);
+
   bool is_strict_{false};
   bool enable_auto_rename_{false};
   PackageMap package_map_;
   drake::internal::DiagnosticPolicy diagnostic_policy_;
   MultibodyPlant<double>* const plant_;
   std::optional<std::string> model_name_prefix_;
+  struct ParserInternalData;
+  std::unique_ptr<ParserInternalData> data_;
 };
 
 }  // namespace multibody
 }  // namespace drake
-

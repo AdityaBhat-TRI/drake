@@ -1,3 +1,6 @@
+#include <unistd.h>
+
+#include <cstdlib>
 #include <filesystem>
 
 #include <gflags/gflags.h>
@@ -39,7 +42,16 @@ int do_main(int argc, char* argv[]) {
     return 1;
   }
 
-  VolumeMesh<double> mesh = internal::ReadVtkToVolumeMesh(argv[1]);
+  // Make cwd be what the user expected, not the runfiles tree.
+  if (const char* path = std::getenv("BUILD_WORKING_DIRECTORY")) {
+    const int error = ::chdir(path);
+    if (error != 0) {
+      log()->warn("Could not chdir to '{}'", path);
+    }
+  }
+
+  VolumeMesh<double> mesh =
+      internal::ReadVtkToVolumeMesh(std::filesystem::path(argv[1]));
   std::vector<int> bad_tets =
       internal::DetectTetrahedronWithAllBoundaryVertices(mesh);
   std::vector<internal::SortedTriplet<int>> bad_triangles =

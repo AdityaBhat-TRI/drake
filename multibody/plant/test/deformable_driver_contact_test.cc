@@ -51,19 +51,19 @@ class DeformableDriverContactTest : public ::testing::Test {
   void SetUp() override {
     systems::DiagramBuilder<double> builder;
     std::tie(plant_, scene_graph_) = AddMultibodyPlantSceneGraph(&builder, kDt);
-    auto deformable_model = make_unique<DeformableModel<double>>(plant_);
+    DeformableModel<double>& deformable_model =
+        plant_->mutable_deformable_model();
     /* Move the first deformable up so that the bottom half of it intersects the
-     * rigid box. */
+     rigid box. */
     const RigidTransformd X_WD0(Vector3d(0, 0, 1.25));
-    body_id0_ = RegisterDeformableOctahedron(X_WD0, deformable_model.get(),
-                                             "deformable0");
+    body_id0_ =
+        RegisterDeformableOctahedron(X_WD0, &deformable_model, "deformable0");
     /* Move the second deformable down so that the top half of it intersects the
-     * rigid box. */
+     rigid box. */
     const RigidTransformd X_WD1(Vector3d(0, 0, -1.25));
-    body_id1_ = RegisterDeformableOctahedron(X_WD1, deformable_model.get(),
-                                             "deformable1");
-    model_ = deformable_model.get();
-    plant_->AddPhysicalModel(std::move(deformable_model));
+    body_id1_ =
+        RegisterDeformableOctahedron(X_WD1, &deformable_model, "deformable1");
+    model_ = &plant_->deformable_model();
     // N.B. Deformables are only supported with the SAP solver.
     // Thus for testing we choose one arbitrary contact approximation that uses
     // the SAP solver.
@@ -90,9 +90,6 @@ class DeformableDriverContactTest : public ::testing::Test {
     driver_ = manager_->deformable_driver();
     DRAKE_DEMAND(driver_ != nullptr);
 
-    builder.Connect(model_->vertex_positions_port(),
-                    scene_graph_->get_source_configuration_port(
-                        plant_->get_source_id().value()));
     diagram_ = builder.Build();
     context_ = diagram_->CreateDefaultContext();
   }
@@ -180,7 +177,7 @@ class DeformableDriverContactTest : public ::testing::Test {
   MultibodyPlant<double>* plant_{nullptr};
   SceneGraph<double>* scene_graph_{nullptr};
   std::unique_ptr<systems::Diagram<double>> diagram_;
-  DeformableModel<double>* model_{nullptr};
+  const DeformableModel<double>* model_{nullptr};
   const CompliantContactManager<double>* manager_{nullptr};
   const DeformableDriver<double>* driver_{nullptr};
   std::unique_ptr<Context<double>> context_;
@@ -380,6 +377,46 @@ TEST_F(DeformableDriverContactTest, AppendLinearDynamicsMatrix) {
                       plant_->time_step());
 }
 
+TEST_F(DeformableDriverContactTest, AppendLinearDynamicsMatrixDisabled) {
+  const Context<double>& plant_context =
+      plant_->GetMyContextFromRoot(*context_);
+  Context<double>& mutable_plant_context =
+      plant_->GetMyMutableContextFromRoot(context_.get());
+  std::vector<MatrixXd> A;
+  driver_->AppendLinearDynamicsMatrix(plant_context, &A);
+  /* Confirm the bodies, when enabled, have non-trivial linear dynamics
+   matrices. */
+  ASSERT_EQ(A.size(), 2);
+  EXPECT_NE(A[0].size(), 0);
+  EXPECT_NE(A[1].size(), 0);
+
+  /* With body0 disabled, ensure that the dynamics matrix for body0 is empty. */
+  model_->Disable(body_id0_, &mutable_plant_context);
+
+  A.clear();
+  driver_->AppendLinearDynamicsMatrix(plant_context, &A);
+  ASSERT_EQ(A.size(), 2);
+  EXPECT_EQ(A[0].rows(), 0);
+  EXPECT_EQ(A[0].cols(), 0);
+  /* The linear dynamics matrix for body1 remains unchanged. */
+  DeformableBodyIndex body_index1(1);
+  EXPECT_EQ(A[1], EvalFreeMotionTangentMatrixSchurComplement(plant_context,
+                                                             body_index1)
+                          .get_D_complement() *
+                      plant_->time_step());
+
+  /* With all bodies disabled, ensure the linear dynamics matrices for both
+   bodies are empty. */
+  model_->Disable(body_id1_, &mutable_plant_context);
+  A.clear();
+  driver_->AppendLinearDynamicsMatrix(plant_context, &A);
+  ASSERT_EQ(A.size(), 2);
+  for (int i = 0; i < 2; ++i) {
+    EXPECT_EQ(A[i].rows(), 0);
+    EXPECT_EQ(A[i].cols(), 0);
+  }
+}
+
 TEST_F(DeformableDriverContactTest, AppendDiscreteContactPairs) {
   const Context<double>& plant_context =
       plant_->GetMyContextFromRoot(*context_);
@@ -395,14 +432,10 @@ TEST_F(DeformableDriverContactTest, AppendDiscreteContactPairs) {
   }
   EXPECT_GT(num_contact_points, 0);
   EXPECT_EQ(contact_pairs.size(), num_contact_points);
-  /* tau for deformable body is set to kDissipationTimeScale and is unset for
-   rigid body (which then assumes the default value, dt). */
-  constexpr double expected_tau = kDissipationTimeScale + kDt;
-  /* The H&C damping is set to be d = k₂/(k₁+k₂)⋅d₁ + k₁/(k₁+k₂)⋅d₂. In this
-   case, the stiffness of the rigid body defaults to infinity so the damping
-   value takes the mathematical limit in that expression, i.e. the damping
-   value of the deformable body. */
-  constexpr double expected_d = kHcDampingDeformable;
+  /* tau for deformable contact is always dt, the "near-rigid" regime value. */
+  const double expected_tau = kDt;
+  /* The H&C damping is always zero for deformables contact. */
+  constexpr double expected_d = 0.0;
 
   GeometryId id0 = model_->GetGeometryId(body_id0_);
   GeometryId id1 = model_->GetGeometryId(body_id1_);
@@ -452,6 +485,55 @@ TEST_F(DeformableDriverContactTest, AppendDiscreteContactPairs) {
   }
   EXPECT_EQ(face_indices_0, expected_face_indices);
   EXPECT_EQ(face_indices_1, expected_face_indices);
+}
+
+/* Test that disabled deformable bodies are ignored when computing contact
+ pairs. */
+TEST_F(DeformableDriverContactTest, AppendDiscreteContactPairsDisabled) {
+  const Context<double>& plant_context =
+      plant_->GetMyContextFromRoot(*context_);
+  Context<double>& mutable_plant_context =
+      plant_->GetMyMutableContextFromRoot(context_.get());
+
+  /* Test combinations of deformable contact pairs where zero, one, or both of
+   the bodies are disabled. */
+  std::vector<std::vector<std::pair<DeformableBodyId, bool>>> test_cases = {
+      {{body_id0_, true}, {body_id1_, true}},
+      {{body_id0_, true}, {body_id1_, false}},
+      {{body_id0_, false}, {body_id1_, false}},
+  };
+
+  for (const auto& test_case : test_cases) {
+    const DeformableContact<double>& contact_data =
+        EvalDeformableContact(plant_context);
+
+    /* Apply enable/disable per the test case configuration. Compute the
+     number of expected contacts from the enabled body count. */
+    int num_contact_points = 0;
+    for (const auto& [deformable_id, is_enabled] : test_case) {
+      if (is_enabled) {
+        model_->Enable(deformable_id, &mutable_plant_context);
+      } else {
+        model_->Disable(deformable_id, &mutable_plant_context);
+      }
+
+      /* Compute this model's contribution to the expected contact point count,
+        disregarding disabled models. */
+      for (const DeformableContactSurface<double>& surface :
+           contact_data.contact_surfaces()) {
+        const GeometryId geom_id = model_->GetGeometryId(deformable_id);
+        if (surface.id_A() == geom_id || surface.id_B() == geom_id) {
+          num_contact_points += is_enabled ? surface.num_contact_points() : 0;
+        }
+      }
+    }
+
+    DiscreteContactData<DiscreteContactPair<double>> contact_pairs;
+    driver_->AppendDiscreteContactPairs(plant_context, &contact_pairs);
+
+    EXPECT_GE(num_contact_points, 0);
+    EXPECT_EQ(contact_pairs.size(), num_contact_points);
+  }
 }
 
 /* Verifies that the post contact velocites for deformable bodies are as

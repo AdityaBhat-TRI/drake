@@ -9,6 +9,7 @@
 #include <unordered_set>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include "drake/common/hash.h"
 #include "drake/common/unused.h"
@@ -287,6 +288,33 @@ CacheEntry& SystemBase::DeclareCacheEntryWithKnownTicket(
   return new_entry;
 }
 
+bool SystemBase::IsObviouslyNotInputDependent(
+    DependencyTicket dependency_ticket) const {
+  // Everything `<= ceiling` is known to be non-input-dependent; this is
+  // promised by the framework_common.h documentation.
+  const auto ceiling = internal::kAllSourcesExceptInputPortsTicket;
+  static_assert(internal::kAllInputPortsTicket > ceiling);
+  static_assert(internal::kAllSourcesTicket > ceiling);
+  static_assert(internal::kConfigurationTicket > ceiling);
+  static_assert(internal::kKinematicsTicket > ceiling);
+  return (dependency_ticket <= ceiling) ||
+         std::any_of(discrete_state_tickets_.begin(),
+                     discrete_state_tickets_.end(),
+                     [&dependency_ticket](const auto& info) {
+                       return info.ticket == dependency_ticket;
+                     }) ||
+         std::any_of(abstract_state_tickets_.begin(),
+                     abstract_state_tickets_.end(),
+                     [&dependency_ticket](const auto& info) {
+                       return info.ticket == dependency_ticket;
+                     });
+  // We could also plausibly scan {numeric,abstract}_parameter_tickets_ to
+  // return true, but we don't believe the cost is worth it. Usually there
+  // are many parameters (so the scan would need to check many items), but
+  // output ports usually depend on all_parameters_ticket() not each small
+  // parameter one by one.
+}
+
 void SystemBase::InitializeContextBase(ContextBase* context_ptr) const {
   DRAKE_DEMAND(context_ptr != nullptr);
   ContextBase& context = *context_ptr;
@@ -395,6 +423,21 @@ void SystemBase::CreateSourceTrackers(ContextBase* context_ptr) const {
         &context, iport->get_index(), iport->ticket(),
         MakeFixInputPortTypeChecker(iport->get_index()));
   }
+}
+
+void SystemBase::set_parent_service(
+    SystemBase* child,
+    const internal::SystemParentServiceInterface* parent_service) {
+  DRAKE_DEMAND(child != nullptr);
+  DRAKE_DEMAND(parent_service != nullptr);
+  if (child->parent_service_ != nullptr) {
+    throw std::logic_error(fmt::format(
+        "Cannot build subsystem '{}' into Diagram '{}' because it has already "
+        "been built into a different Diagram '{}'",
+        child->GetSystemName(), parent_service->GetParentPathname(),
+        child->parent_service_->GetParentPathname()));
+  }
+  child->parent_service_ = parent_service;
 }
 
 // The only way for a system to evaluate its own input port is if that

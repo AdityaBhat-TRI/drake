@@ -16,6 +16,15 @@ AddMultibodyPlantSceneGraphResult<double> AddMultibodyPlant(
     const MultibodyPlantConfig& config,
     systems::DiagramBuilder<double>* builder);
 
+/// Adds a new MultibodyPlant and SceneGraph to the given `builder`.  The
+/// plant's settings such as `time_step` are set using the given
+/// `plant_config`. The scene graph's settings are set using the given
+/// `scene_graph_config`.
+AddMultibodyPlantSceneGraphResult<double> AddMultibodyPlant(
+    const MultibodyPlantConfig& plant_config,
+    const geometry::SceneGraphConfig& scene_graph_config,
+    systems::DiagramBuilder<double>* builder);
+
 /// Applies settings given in `config` to an existing `plant`. The `time_step`
 /// is the one value in `config` that cannot be updated -- it can only be set
 /// in the MultibodyPlant constructor. Consider using AddMultibodyPlant() or
@@ -37,19 +46,6 @@ ContactModel GetContactModelFromString(std::string_view contact_model);
 // (Exposed for unit testing only.)
 // Returns the string name of an enumerated value for a contact model.
 std::string GetStringFromContactModel(ContactModel contact_model);
-
-// (Exposed for unit testing only.)
-// Parses a string name for a contact solver type and returns the enumerated
-// value. Valid string names are listed in MultibodyPlantConfig's class
-// overview.
-// @throws std::exception if an invalid string is passed in.
-DiscreteContactSolver GetDiscreteContactSolverFromString(
-    std::string_view discrete_contact_solver);
-
-// (Exposed for unit testing only.) Returns the string name of an enumerated
-// value for a discrete contact solver type.
-std::string GetStringFromDiscreteContactSolver(
-    DiscreteContactSolver discrete_contact_solver);
 
 DiscreteContactApproximation GetDiscreteContactApproximationFromString(
     std::string_view discrete_contact_approximation);

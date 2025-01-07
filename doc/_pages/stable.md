@@ -102,6 +102,9 @@ part of the "Stable API":
   <a href="https://docs.bazel.build/versions/main/build-ref.html#load">loading</a>
   Drake's bzl macros (e.g., `load("@drake//foo:bar.bzl", "bar_macro")`.
 
+Additionally, Drake's Bazel configuration flags at `@drake//tools/flags:*` are
+part of the Stable API.
+
 For Drake's dependencies:
 
 * The `add_default_...` macros defined in `@drake//tools/workspace:default.bzl`
@@ -231,4 +234,5 @@ See [#18791](https://github.com/RobotLocomotion/drake/issues/18791) for a
 discussion of possible improvements.
 
 Refer to [Installation and Quickstart](/installation.html) for the current
-details.
+details, and [End of support releases](/release_notes/end_of_support.html)
+for historical details.

@@ -1,7 +1,4 @@
-load(
-    "//tools/skylark:pybind.bzl",
-    "get_pybind_package_info",
-)
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 load(
     "//tools/skylark:drake_py.bzl",
     "drake_py_library",
@@ -10,11 +7,12 @@ load(
 load(
     "//tools/skylark:pybind.bzl",
     "drake_pybind_library",
+    "get_pybind_package_info",
 )
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 
 package(default_visibility = [
     "//bindings/pydrake:__subpackages__",
+    "//tools/workspace/drake_models:__pkg__",
 ])
 
 # This determines how `PYTHONPATH` is configured.
@@ -34,10 +32,6 @@ drake_py_library(
     name = "algebra_test_util_py",
     testonly = True,
     srcs = ["algebra_test_util.py"],
-    visibility = [
-        "//bindings/pydrake/autodiffutils:__pkg__",
-        "//bindings/pydrake/symbolic:__pkg__",
-    ],
     deps = [
         ":module_py",
     ],
@@ -61,6 +55,15 @@ drake_py_library(
     testonly = 1,
     srcs = ["deprecation.py"],
     deps = [":module_py"],
+)
+
+drake_py_library(
+    name = "memory_test_util_py",
+    testonly = True,
+    srcs = ["memory_test_util.py"],
+    deps = [
+        ":module_py",
+    ],
 )
 
 drake_py_library(
@@ -133,6 +136,7 @@ drake_py_library(
     testonly = 1,
     deps = [
         ":deprecation_py",
+        ":memory_test_util_py",
         ":module_py",
         ":numpy_compare_py",
         ":pickle_compare_py",

@@ -1,10 +1,10 @@
 load(
-    "//tools/workspace:github.bzl",
-    "setup_github_repository",
-)
-load(
     "//tools/workspace:execute.bzl",
     "execute_or_fail",
+)
+load(
+    "//tools/workspace:github.bzl",
+    "setup_github_repository",
 )
 
 def parse_module(repo_ctx, subdir):
@@ -172,20 +172,23 @@ def vtk_internal_repository(
         # TODO(jwnimmer-tri) Once there's a tagged release with support for
         # VTK_ABI_NAMESPACE, we should switch to an official version number
         # here. That probably means waiting for the VTK 10 release.
-        commit = "1375016aeb6f91b9c7a7157f23da5f1e581bfccc",
-        sha256 = "714d9d9f253cd8178ecf5e30c25a39c9866c5d71fac9b9e5fd83b2138d28d9e5",  # noqa
+        commit = "e43b7215c0f57781626c4cd31c95cd1c1b7a3d48",
+        sha256 = "6794ad2d95d36d1b6c83ed31ea18ffc1adef33d1ced94aab1aa04c0f10b5602a",  # noqa
         build_file = ":package.BUILD.bazel",
         patches = [
-            ":patches/camera_copy.patch",
+            ":patches/upstream/fix_illumination_bugs.patch",
+            ":patches/upstream/gltf_selected_load.patch",
+            ":patches/upstream/io_geometry_gltf_default_scene.patch",
+            ":patches/upstream/gltf_importer_from_stream.patch",
+            ":patches/common_core_nobacktrace.patch",
             ":patches/common_core_version.patch",
-            ":patches/fix_illumination_bugs.patch",
-            ":patches/gltf_parser.patch",
-            ":patches/gltf_quiet_image_errors.patch",
+            ":patches/disable_static_destructors.patch",
             ":patches/io_image_formats.patch",
+            ":patches/nerf_pegtl.patch",
             ":patches/rendering_opengl2_nobacktrace.patch",
+            ":patches/rendering_opengl2_no_factory.patch",
             ":patches/vtkdoubleconversion_hidden.patch",
             ":patches/vtkfast_float_hidden.patch",
-            ":patches/vtkglew_hidden.patch",
             ":patches/vtkpugixml_hidden.patch",
             ":patches/vtksys_hidden.patch",
         ],

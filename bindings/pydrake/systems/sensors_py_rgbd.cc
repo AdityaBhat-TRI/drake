@@ -1,3 +1,4 @@
+#include "drake/bindings/pydrake/common/ref_cycle_pybind.h"
 #include "drake/bindings/pydrake/documentation_pybind.h"
 #include "drake/bindings/pydrake/systems/sensors_py.h"
 #include "drake/systems/sensors/camera_info.h"
@@ -93,25 +94,69 @@ void DefineSensorsRgbd(py::module m) {
           py::arg("parent_id"), py::arg("X_PB"), py::arg("depth_camera"),
           py::arg("show_window") = false,
           doc.RgbdSensor.ctor.doc_combined_intrinsics)
-      .def("color_camera_info", &RgbdSensor::color_camera_info,
-          py_rvp::reference_internal, doc.RgbdSensor.color_camera_info.doc)
-      .def("depth_camera_info", &RgbdSensor::depth_camera_info,
-          py_rvp::reference_internal, doc.RgbdSensor.depth_camera_info.doc)
-      .def("X_BC", &RgbdSensor::X_BC, doc.RgbdSensor.X_BC.doc)
-      .def("X_BD", &RgbdSensor::X_BD, doc.RgbdSensor.X_BD.doc)
-      .def("parent_frame_id", &RgbdSensor::parent_frame_id,
-          py_rvp::reference_internal, doc.RgbdSensor.parent_frame_id.doc);
+      .def("default_color_render_camera",
+          &RgbdSensor::default_color_render_camera, py_rvp::reference_internal,
+          doc.RgbdSensor.default_color_render_camera.doc)
+      .def("set_default_color_render_camera",
+          &RgbdSensor::set_default_color_render_camera, py::arg("color_camera"),
+          doc.RgbdSensor.set_default_color_render_camera.doc)
+      .def("GetColorRenderCamera", &RgbdSensor::GetColorRenderCamera,
+          py::arg("context"), py_rvp::reference_internal,
+          doc.RgbdSensor.GetColorRenderCamera.doc)
+      .def("SetColorRenderCamera", &RgbdSensor::SetColorRenderCamera,
+          py::arg("context"), py::arg("color_camera"),
+          doc.RgbdSensor.SetColorRenderCamera.doc)
+      .def("default_depth_render_camera",
+          &RgbdSensor::default_depth_render_camera, py_rvp::reference_internal,
+          doc.RgbdSensor.default_depth_render_camera.doc)
+      .def("set_default_depth_render_camera",
+          &RgbdSensor::set_default_depth_render_camera, py::arg("depth_camera"),
+          doc.RgbdSensor.set_default_depth_render_camera.doc)
+      .def("GetDepthRenderCamera", &RgbdSensor::GetDepthRenderCamera,
+          py::arg("context"), py_rvp::reference_internal,
+          doc.RgbdSensor.GetDepthRenderCamera.doc)
+      .def("SetDepthRenderCamera", &RgbdSensor::SetDepthRenderCamera,
+          py::arg("context"), py::arg("depth_camera"),
+          doc.RgbdSensor.SetDepthRenderCamera.doc)
+      .def("default_X_PB", &RgbdSensor::default_X_PB,
+          py_rvp::reference_internal, doc.RgbdSensor.default_X_PB.doc)
+      .def("set_default_X_PB", &RgbdSensor::set_default_X_PB,
+          py::arg("sensor_pose"), doc.RgbdSensor.set_default_X_PB.doc)
+      .def("GetX_PB", &RgbdSensor::GetX_PB, py::arg("context"),
+          py_rvp::reference_internal, doc.RgbdSensor.GetX_PB.doc)
+      .def("SetX_PB", &RgbdSensor::SetX_PB, py::arg("context"),
+          py::arg("sensor_pose"), doc.RgbdSensor.SetX_PB.doc)
+      .def("default_parent_frame_id", &RgbdSensor::default_parent_frame_id,
+          doc.RgbdSensor.default_parent_frame_id.doc)
+      .def("set_default_parent_frame_id",
+          &RgbdSensor::set_default_parent_frame_id, py::arg("id"),
+          doc.RgbdSensor.set_default_parent_frame_id.doc)
+      .def("GetParentFrameId", &RgbdSensor::GetParentFrameId,
+          py::arg("context"), doc.RgbdSensor.GetParentFrameId.doc)
+      .def("SetParentFrameId", &RgbdSensor::SetParentFrameId,
+          py::arg("context"), py::arg("id"),
+          doc.RgbdSensor.SetParentFrameId.doc);
   def_camera_ports(&rgbd_sensor, doc.RgbdSensor);
 
   py::class_<RgbdSensorDiscrete, Diagram<double>> rgbd_camera_discrete(
       m, "RgbdSensorDiscrete", doc.RgbdSensorDiscrete.doc);
   rgbd_camera_discrete
-      .def(py::init<std::unique_ptr<RgbdSensor>, double, bool>(),
+      .def(py::init(
+               [](RgbdSensor& sensor, double period, bool render_label_image) {
+                 // The C++ constructor doesn't offer a bare-pointer overload,
+                 // only shared_ptr. Because object lifetime is already handled
+                 // by the ref_cycle annotation below (as required for all
+                 // subclasses of Diagram), we can pass the `sensor` as an
+                 // unowned shared_ptr.
+                 return std::make_unique<RgbdSensorDiscrete>(
+                     make_unowned_shared_ptr_from_raw(&sensor), period,
+                     render_label_image);
+               }),
           py::arg("sensor"),
           py::arg("period") = double{RgbdSensorDiscrete::kDefaultPeriod},
           py::arg("render_label_image") = true,
-          // Keep alive, ownership: `sensor` keeps `self` alive.
-          py::keep_alive<2, 1>(), doc.RgbdSensorDiscrete.ctor.doc)
+          // `self` and `sensor` form a cycle as part of the Diagram.
+          internal::ref_cycle<1, 2>(), doc.RgbdSensorDiscrete.ctor.doc)
       // N.B. Since `camera` is already connected, we do not need additional
       // `keep_alive`s.
       .def("sensor", &RgbdSensorDiscrete::sensor, py_rvp::reference_internal,

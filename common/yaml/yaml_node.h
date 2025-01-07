@@ -93,7 +93,7 @@ Refer to https://yaml.org/spec/1.2.2/#tags for details.
 */
 class Node final {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Node)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Node);
 
   /* Returns a Scalar node with the given value.
   Note that even though Drake most often uses "scalar" to refer to a
@@ -170,6 +170,9 @@ class Node final {
 
   // https://yaml.org/spec/1.2.2/#generic-string
   static constexpr std::string_view kTagStr{"tag:yaml.org,2002:str"};
+
+  // https://yaml.org/type/binary.html
+  static constexpr std::string_view kTagBinary{"tag:yaml.org,2002:binary"};
 
   /* Sets the filename where this Node was read from. A nullopt indicates that
   the filename is not known. */

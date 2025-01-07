@@ -1,12 +1,15 @@
-package(default_visibility = ["//visibility:private"])
-
 load("@bazel_skylib//lib:selects.bzl", "selects")
+load("@bazel_skylib//rules:run_binary.bzl", "run_binary")
 load(
-    "@python//:version.bzl",
-    "PYTHON_SITE_PACKAGES_RELPATH",
-    "PYTHON_VERSION",
+    "@drake//tools/workspace:cmake_configure_file.bzl",
+    "cmake_configure_file",
+)
+load(
+    "//third_party:com_github_bazelbuild_rules_cc/whole_archive.bzl",
+    "cc_whole_archive_library",
 )
 load("//tools/install:install.bzl", "install", "install_cmake_config")
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load("//tools/skylark:cc.bzl", "cc_binary", "cc_library")
 load(
     "//tools/skylark:drake_cc.bzl",
@@ -17,25 +20,53 @@ load(
 )
 load(
     "//tools/skylark:drake_py.bzl",
+    "drake_py_binary",
     "drake_py_unittest",
 )
-load(":header_lint.bzl", "cc_check_allowed_headers")
-load("//tools/lint:lint.bzl", "add_lint_tests")
 load(":build_components.bzl", "LIBDRAKE_COMPONENTS")
-load(
-    "//third_party:com_github_bazelbuild_rules_cc/whole_archive.bzl",
-    "cc_whole_archive_library",
+load(":header_lint.bzl", "cc_check_allowed_headers")
+
+package(default_visibility = ["//visibility:private"])
+
+genrule(
+    name = "python_version_cmake",
+    srcs = ["//tools/workspace/python:python_version.txt"],
+    outs = ["python_version.cmake"],
+    cmd = """echo "set(PYTHON_VERSION \\"$$(cat $<)\\")" > $@""",
 )
 
 genrule(
+    name = "stamp_version",
+    outs = ["stamp_version.txt"],
+    cmd_bash = "sed -n '/^STABLE_VERSION/p' bazel-out/stable-status.txt > $@",
+    stamp = 1,
+)
+
+drake_py_binary(
+    name = "parse_version",
+    srcs = ["parse_version.py"],
+)
+
+run_binary(
+    name = "drake_parse_version_stamp",
+    srcs = ["stamp_version.txt"],
+    outs = ["stamp_version.cmake"],
+    args = [
+        "$(location stamp_version.txt)",
+        "$(location stamp_version.cmake)",
+    ],
+    tool = "parse_version",
+)
+
+cmake_configure_file(
     name = "drake_config_cmake_expand",
-    srcs = ["drake-config.cmake.in"],
-    outs = ["drake-config.cmake"],
-    cmd = "sed '" +
-          "s!@PYTHON_SITE_PACKAGES_RELPATH@!" +
-          PYTHON_SITE_PACKAGES_RELPATH + "!g;" +
-          "s!@PYTHON_VERSION@!" + PYTHON_VERSION + "!g;" +
-          "' $< > $@",
+    src = "drake-config.cmake.in",
+    out = "drake-config.cmake",
+    atonly = True,
+    cmakelists = [
+        ":python_version.cmake",
+        ":stamp_version.cmake",
+    ],
 )
 
 install_cmake_config(
@@ -124,31 +155,11 @@ install(
     ],
 )
 
-# Depend on IPOPT's shared library iff IPOPT is enabled and we're on a platform
-# that uses the host OS shared library.
-selects.config_setting_group(
-    name = "ipopt_not_shared",
-    match_any = [
-        "//tools:no_ipopt",
-        "//tools/cc_toolchain:linux",
-    ],
-)
-
-cc_library(
-    name = "ipopt_deps",
-    deps = selects.with_or({
-        "//conditions:default": [
-            "@ipopt",
-        ],
-        ":ipopt_not_shared": [],
-    }),
-)
-
 # Depend on Gurobi's shared library iff Gurobi is enabled.
 cc_library(
     name = "gurobi_deps",
     deps = select({
-        "//tools:with_gurobi": ["@gurobi//:gurobi_c"],
+        "//tools/workspace/gurobi:enabled": ["@gurobi//:gurobi_c"],
         "//conditions:default": [],
     }),
 )
@@ -157,7 +168,18 @@ cc_library(
 cc_library(
     name = "mosek_deps",
     deps = select({
-        "//tools:with_mosek": ["@mosek"],
+        "//tools/workspace/mosek:enabled": ["@mosek"],
+        "//conditions:default": [],
+    }),
+)
+
+# Depend on TBB shared library iff USD is enabled.
+cc_library(
+    name = "usd_deps",
+    deps = select({
+        "//tools:with_usd": [
+            "@mosek//:tbb",
+        ],
         "//conditions:default": [],
     }),
 )
@@ -202,8 +224,8 @@ cc_library(
     name = "libdrake_runtime_so_deps",
     deps = [
         ":gurobi_deps",
-        ":ipopt_deps",
         ":mosek_deps",
+        ":usd_deps",
         ":x11_deps",
         "//common:drake_marker_shared_library",
         "@lcm",

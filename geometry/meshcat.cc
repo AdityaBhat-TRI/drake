@@ -20,6 +20,7 @@
 #include <App.h>
 #include <common_robotics_utilities/base64_helpers.hpp>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <msgpack.hpp>
 
 #include "drake/common/drake_export.h"
@@ -32,7 +33,10 @@
 #include "drake/common/text_logging.h"
 #include "drake/geometry/meshcat_file_storage_internal.h"
 #include "drake/geometry/meshcat_internal.h"
+#include "drake/geometry/meshcat_recording_internal.h"
 #include "drake/geometry/meshcat_types_internal.h"
+#include "drake/geometry/proximity/polygon_to_triangle_mesh.h"
+#include "drake/systems/analysis/realtime_rate_calculator.h"
 
 #ifdef BOOST_VERSION
 #error Drake should be using the non-boost flavor of msgpack.
@@ -55,14 +59,15 @@ using math::RotationMatrixd;
 
 template <typename Mapping>
 [[noreturn]] void ThrowThingNotFound(std::string_view thing,
-                                     std::string_view name, Mapping thing_map) {
+                                     std::string_view name,
+                                     const Mapping& thing_map) {
   std::vector<std::string> keys;
   for (const auto& map_pair : thing_map) {
     keys.push_back(map_pair.first);
   }
   throw std::logic_error(
-      fmt::format("Meshcat does not have any {} named {}.  The "
-                  "registered {} names are ({}).",
+      fmt::format("Meshcat does not have any {} named {}."
+                  " The registered {} names are ({}).",
                   thing, name, thing, fmt::join(keys, ", ")));
 }
 
@@ -118,7 +123,7 @@ class SceneTreeElement {
     /* If the message refers to http assets (e.g., image files), then this list
     is responsible for keeping alive a non-zero reference count for those
     file(s) in our in-memory storage. */
-    std::vector<std::shared_ptr<const FileStorage::Handle>> assets;
+    std::vector<std::shared_ptr<const MemoryFile>> assets;
   };
 
   // Provide direct access to all member fields except the list of children.
@@ -251,13 +256,61 @@ class SceneTreeElement {
   std::map<std::string, std::unique_ptr<SceneTreeElement>> children_;
 };
 
+int ToMeshcatColor(const Rgba& rgba) {
+  // Note: The returned color discards the alpha value, which is handled
+  // separately (e.g. by the opacity field in the material properties).
+  return (static_cast<int>(255 * rgba.r()) << 16) +
+         (static_cast<int>(255 * rgba.g()) << 8) +
+         static_cast<int>(255 * rgba.b());
+}
+
+// Sets the lumped object's geometry, material, and object type based on the
+// mesh data and its material properties.
+void SetLumpedObjectFromTriangleMesh(
+    internal::LumpedObjectData* object,
+    const Eigen::Ref<const Eigen::Matrix3Xd>& vertices,
+    const Eigen::Ref<const Eigen::Matrix3Xi>& faces, const Rgba& rgba,
+    bool wireframe, double wireframe_line_width,
+    Meshcat::SideOfFaceToRender side, internal::UuidGenerator* uuid_generator) {
+  DRAKE_DEMAND(object != nullptr);
+  DRAKE_DEMAND(uuid_generator != nullptr);
+
+  auto geometry = std::make_unique<internal::BufferGeometryData>();
+  geometry->uuid = uuid_generator->GenerateRandom();
+  geometry->position = vertices.cast<float>();
+  geometry->faces = faces.cast<uint32_t>();
+  object->geometry = std::move(geometry);
+
+  auto material = std::make_unique<internal::MaterialData>();
+  material->uuid = uuid_generator->GenerateRandom();
+  material->type = "MeshPhongMaterial";
+  material->color = ToMeshcatColor(rgba);
+  material->transparent = (rgba.a() != 1.0);
+  material->opacity = rgba.a();
+  material->wireframe = wireframe;
+  material->wireframeLineWidth = wireframe_line_width;
+  material->vertexColors = false;
+  material->side = side;
+  material->flatShading = true;
+  object->material = std::move(material);
+
+  internal::MeshData mesh;
+  mesh.uuid = uuid_generator->GenerateRandom();
+  mesh.type = "Mesh";
+  mesh.geometry = object->geometry->uuid;
+  mesh.material = object->material->uuid;
+  object->object = std::move(mesh);
+}
+
 class MeshcatShapeReifier : public ShapeReifier {
  public:
   DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MeshcatShapeReifier);
 
   MeshcatShapeReifier(internal::UuidGenerator* uuid_generator,
-                      FileStorage* file_storage)
-      : uuid_generator_(*uuid_generator), file_storage_(*file_storage) {
+                      FileStorage* file_storage, Rgba rgba)
+      : uuid_generator_(*uuid_generator),
+        file_storage_(*file_storage),
+        rgba_(rgba) {
     DRAKE_DEMAND(uuid_generator != nullptr);
     DRAKE_DEMAND(file_storage != nullptr);
   }
@@ -268,15 +321,14 @@ class MeshcatShapeReifier : public ShapeReifier {
   // to ImplementGeometry() should always be passed as this type.
   struct Output {
     internal::LumpedObjectData& lumped;
-    std::vector<std::shared_ptr<const FileStorage::Handle>>& assets;
+    std::vector<std::shared_ptr<const MemoryFile>>& assets;
   };
 
   using ShapeReifier::ImplementGeometry;
 
-  // Helper for ImplementGeometry, common to both Mesh and Convex shapes.
-  // The `extension` is lowercase and includes the leading dot (e.g., ".obj").
-  void ImplementMesh(const std::string& filename, const std::string& extension,
-                     double scale, void* data) {
+  // TODO(SeanCurtis-TRI): In follow up commit, move this down in alphabetical
+  // order.
+  void ImplementGeometry(const Mesh& mesh, void* data) override {
     DRAKE_DEMAND(data != nullptr);
     auto& output = *static_cast<Output*>(data);
     auto& lumped = output.lumped;
@@ -284,23 +336,38 @@ class MeshcatShapeReifier : public ShapeReifier {
     // meshes unless necessary.  Using the filename is tempting, but that leads
     // to problems when the file contents change on disk.
 
-    std::string format = extension;
+    std::string format = mesh.extension();
     format.erase(0, 1);  // remove the . from the extension
-    std::optional<std::string> maybe_mesh_data = ReadFile(filename);
-    if (!maybe_mesh_data) {
-      drake::log()->warn("Meshcat: Could not open mesh filename {}", filename);
-      return;
-    }
+
+    const MeshSource& mesh_source = mesh.source();
+
+    // Precompute the basedir which we'll only use if source.is_path().
+    const fs::path basedir_if_path =
+        mesh_source.is_path() ? mesh_source.path().parent_path() : fs::path();
 
     // We simply dump the binary contents of the file into the data field of the
-    // message.  The javascript meshcat takes care of the rest.
-    std::string mesh_data = std::move(*maybe_mesh_data);
+    // message. The javascript meshcat takes care of the rest, but first we
+    // need to acquire a copy -- either from a file or from an in-memory string.
+    std::string mesh_data;
+    if (mesh_source.is_path()) {
+      std::optional<std::string> maybe_mesh_data = ReadFile(mesh_source.path());
+      if (!maybe_mesh_data) {
+        drake::log()->warn("Meshcat: Could not open mesh filename {}",
+                           mesh_source.path().string());
+        return;
+      }
+      mesh_data = std::move(*maybe_mesh_data);
+    } else {
+      DRAKE_DEMAND(mesh_source.is_in_memory());
+      mesh_data = mesh_source.in_memory().mesh_file.contents();
+    }
 
     // TODO(russt): MeshCat.jl/src/mesh_files.jl loads dae with textures, also.
 
     // TODO(russt): Make this mtllib parsing more robust (right now commented
     // mtllib lines will match, too, etc).
     size_t mtllib_pos;
+    bool use_meshfile_geometry = false;
     if (format == "obj" &&
         (mtllib_pos = mesh_data.find("mtllib ")) != std::string::npos) {
       mtllib_pos += 7;  // Advance to after the actual "mtllib " string.
@@ -320,26 +387,40 @@ class MeshcatShapeReifier : public ShapeReifier {
       meshfile_object.format = std::move(format);
       meshfile_object.data = std::move(mesh_data);
 
-      std::string mtllib = matches.str(1);
+      const std::string mtllib = matches.str(1);
 
-      // Use filename path as the base directory for textures.
-      const std::filesystem::path basedir =
-          std::filesystem::path(filename).parent_path();
+      std::optional<std::string> maybe_mtl_data;
+      if (mesh_source.is_path()) {
+        DRAKE_DEMAND(!basedir_if_path.empty());
+        maybe_mtl_data = ReadFile(basedir_if_path / mtllib);
+      } else {
+        const auto mtl_iter =
+            mesh_source.in_memory().supporting_files.find(mtllib);
+        if (mtl_iter != mesh_source.in_memory().supporting_files.end()) {
+          maybe_mtl_data = std::visit<std::optional<std::string>>(
+              overloaded{[](const fs::path& path) {
+                           return ReadFile(path);
+                         },
+                         [](const MemoryFile& file) {
+                           return file.contents();
+                         }},
+              mtl_iter->second);
+        }
+      }
 
       // Read .mtl file into geometry.mtl_library.
-      if (std::optional<std::string> maybe_mtl_data =
-              ReadFile(basedir / mtllib)) {
+      if (maybe_mtl_data.has_value()) {
         meshfile_object.mtl_library = std::move(*maybe_mtl_data);
 
         // Scan .mtl file for map_ lines.  For each, load the file and add
         // the contents to geometry.resources.
         // The syntax (http://paulbourke.net/dataformats/mtl/) is e.g.
-        //   map_Ka -options args filename
-        // Here we ignore the options and only extract the filename (by
+        //   map_Ka -options args image_name
+        // Here we ignore the options and only extract the image_name (by
         // extracting the last word before the end of line/string).
         //  - "map_.+" matches the map_ plus any options,
-        //  - "\s" matches one whitespace (before the filename),
-        //  - "[^\s]+" matches the filename, and
+        //  - "\s" matches one whitespace (before the image_name),
+        //  - "[^\s]+" matches the image_name, and
         //  - "[$\r\n]" matches the end of string or end of line.
         // TODO(russt): This parsing could still be more robust.
         std::regex map_regex(R"""(map_.+\s([^\s]+)\s*[$\r\n])""");
@@ -347,36 +428,83 @@ class MeshcatShapeReifier : public ShapeReifier {
                                        meshfile_object.mtl_library.end(),
                                        map_regex);
              iter != std::sregex_iterator(); ++iter) {
-          std::string map = iter->str(1);
-          std::ifstream map_stream(basedir / map,
-                                   std::ios::binary | std::ios::ate);
-          if (map_stream.is_open()) {
-            int map_size = map_stream.tellg();
-            map_stream.seekg(0, std::ios::beg);
-            std::vector<uint8_t> map_data;
-            map_data.reserve(map_size);
-            map_data.assign(std::istreambuf_iterator<char>(map_stream),
-                            std::istreambuf_iterator<char>());
+          const std::string map = iter->str(1);
+          // The *possible* path to the texture image; non-empty if we need to
+          // read the image from disk.
+          fs::path maybe_map_path;
+          // We'll put the bytes of the available image in here.
+          std::vector<uint8_t> map_data;
+          if (mesh_source.is_in_memory()) {
+            const auto map_file_iter =
+                mesh_source.in_memory().supporting_files.find(map);
+            if (map_file_iter !=
+                mesh_source.in_memory().supporting_files.end()) {
+              // Load it.
+              std::visit(
+                  overloaded{
+                      [&maybe_map_path](const fs::path& path) {
+                        // Note: paths to supporting files in an in-memory mesh
+                        // have no "base directory". The path must be
+                        // sufficiently well defined so that it can be read
+                        // directly.
+                        maybe_map_path = path;
+                      },
+                      [&map_data](const MemoryFile& file) {
+                        map_data = std::vector<uint8_t>(file.contents().begin(),
+                                                        file.contents().end());
+                      }},
+                  map_file_iter->second);
+            }
+          } else {
+            DRAKE_DEMAND(mesh_source.is_path());
+            maybe_map_path = basedir_if_path / map;
+          }
+
+          // maybe_map_path is non-empty only if one of the paths above
+          // indicated the image is on disk.
+          if (!maybe_map_path.empty()) {
+            std::ifstream map_stream(maybe_map_path,
+                                     std::ios::binary | std::ios::ate);
+            if (map_stream.is_open()) {
+              int map_size = map_stream.tellg();
+              map_stream.seekg(0, std::ios::beg);
+              map_data.reserve(map_size);
+              map_data.assign(std::istreambuf_iterator<char>(map_stream),
+                              std::istreambuf_iterator<char>());
+            }
+          }
+
+          // Either we now have bytes for the map, or we had a look-up error.
+          if (map_data.size() > 0) {
             meshfile_object.resources.try_emplace(
                 map, std::string("data:image/png;base64,") +
                          common_robotics_utilities::base64_helpers::Encode(
                              map_data));
           } else {
             drake::log()->warn(
-                "Meshcat: Failed to load texture. \"{}\" references {}, but "
+                "Meshcat: Failed to load texture. \"{}\" references '{}', but "
                 "Meshcat could not open filename \"{}\"",
-                (basedir / mtllib).string(), map, (basedir / map).string());
+                (basedir_if_path / mtllib).string(), map,
+                maybe_map_path.string());
           }
         }
-      } else {
+      } else if (!mtllib.empty()) {
         drake::log()->warn(
-            "Meshcat: Failed to load texture. {} references {}, but Meshcat "
-            "could not open filename \"{}\"",
-            filename, mtllib, (basedir / mtllib).string());
+            "Meshcat: An obj referenced a material library '{}' that Meshcat "
+            "could not open; no materials will be included. Obj: '{}'.",
+            mtllib, mesh_source.description());
+
+        // If we can't load the mtl file, we'll just send the obj file as if it
+        // did not specify the mtl. MuJoCo often ships obj files that reference
+        // missing mtl files (see #20444).
+        use_meshfile_geometry = true;
+        // Move the data back.
+        format = std::move(meshfile_object.format);
+        mesh_data = std::move(meshfile_object.data);
       }
     } else if (format == "gltf") {
       output.assets =
-          internal::UnbundleGltfAssets(filename, &mesh_data, &file_storage_);
+          internal::UnbundleGltfAssets(mesh_source, &mesh_data, &file_storage_);
       auto& meshfile_object =
           lumped.object.emplace<internal::MeshfileObjectData>();
       meshfile_object.uuid = uuid_generator_.GenerateRandom();
@@ -387,7 +515,10 @@ class MeshcatShapeReifier : public ShapeReifier {
       // mesh file *geometry* instead of mesh file *object*. This will most
       // typically be a Collada .dae file, an .stl, or simply an .obj that
       // doesn't reference an .mtl.
+      use_meshfile_geometry = true;
+    }
 
+    if (use_meshfile_geometry) {
       // TODO(SeanCurtis-TRI): This doesn't work for STL even though meshcat
       // supports STL. Meshcat treats STL differently from obj or dae.
       // https://github.com/meshcat-dev/meshcat/blob/4b4f8ffbaa5f609352ea6227bd5ae8207b579c70/src/index.js#L130-L146.
@@ -418,6 +549,7 @@ class MeshcatShapeReifier : public ShapeReifier {
     }
 
     // Set the scale.
+    const double scale = mesh.scale();
     std::visit<void>(
         overloaded{[](std::monostate) {},
                    [scale](auto& lumped_object) {
@@ -463,7 +595,28 @@ class MeshcatShapeReifier : public ShapeReifier {
   }
 
   void ImplementGeometry(const Convex& mesh, void* data) override {
-    ImplementMesh(mesh.filename(), mesh.extension(), mesh.scale(), data);
+    DRAKE_DEMAND(data != nullptr);
+    auto& output = *static_cast<Output*>(data);
+
+    const PolygonSurfaceMesh<double>& hull = mesh.GetConvexHull();
+    const TriangleSurfaceMesh<double> tri_hull =
+        internal::MakeTriangleFromPolygonMesh(hull);
+
+    Eigen::Matrix3Xd vertices(3, tri_hull.num_vertices());
+    for (int i = 0; i < tri_hull.num_vertices(); ++i) {
+      vertices.col(i) = tri_hull.vertex(i);
+    }
+    Eigen::Matrix3Xi faces(3, tri_hull.num_triangles());
+    for (int i = 0; i < tri_hull.num_triangles(); ++i) {
+      const auto& e = tri_hull.element(i);
+      for (int j = 0; j < 3; ++j) {
+        faces(j, i) = e.vertex(j);
+      }
+    }
+    SetLumpedObjectFromTriangleMesh(&output.lumped, vertices, faces, rgba_,
+                                    /* wireframe =*/false, 1.0,
+                                    Meshcat::SideOfFaceToRender::kDoubleSide,
+                                    &uuid_generator_);
   }
 
   void ImplementGeometry(const Cylinder& cylinder, void* data) override {
@@ -509,10 +662,6 @@ class MeshcatShapeReifier : public ShapeReifier {
     drake::log()->warn("Meshcat does not display HalfSpace geometry (yet).");
   }
 
-  void ImplementGeometry(const Mesh& mesh, void* data) override {
-    ImplementMesh(mesh.filename(), mesh.extension(), mesh.scale(), data);
-  }
-
   void ImplementGeometry(const MeshcatCone& cone, void* data) override {
     DRAKE_DEMAND(data != nullptr);
     auto& output = *static_cast<Output*>(data);
@@ -551,15 +700,8 @@ class MeshcatShapeReifier : public ShapeReifier {
  private:
   internal::UuidGenerator& uuid_generator_;
   FileStorage& file_storage_;
+  Rgba rgba_;
 };
-
-int ToMeshcatColor(const Rgba& rgba) {
-  // Note: The returned color discards the alpha value, which is handled
-  // separately (e.g. by the opacity field in the material properties).
-  return (static_cast<int>(255 * rgba.r()) << 16) +
-         (static_cast<int>(255 * rgba.g()) << 8) +
-         static_cast<int>(255 * rgba.b());
-}
 
 // Meshcat inherits three.js's y-up world and it is applied to camera and
 // camera target positions. To simply set the object's position property, we
@@ -621,7 +763,8 @@ class Meshcat::Impl {
   explicit Impl(const MeshcatParams& params)
       : prefix_("/drake"),
         main_thread_id_(std::this_thread::get_id()),
-        params_(params) {
+        params_(params),
+        rate_calculator_(params_.realtime_rate_period) {
     DRAKE_THROW_UNLESS(!params.port.has_value() || *params.port == 0 ||
                        *params.port >= 1024);
     if (!drake::internal::IsNetworkingAllowed("meshcat")) {
@@ -718,6 +861,33 @@ class Meshcat::Impl {
   int port() const {
     DRAKE_DEMAND(IsThread(main_thread_id_));
     return port_;
+  }
+
+  // This function is public via the PIMPL.
+  void SetSimulationTime(double sim_time) {
+    DRAKE_DEMAND(IsThread(main_thread_id_));
+    sim_time_ = sim_time;
+    const auto report = rate_calculator_.UpdateAndRecalculate(sim_time);
+    if (report.initialized) {
+      // We won't broadcast it, but we do return to the initialized state.
+      realtime_rate_ = 0.0;
+      return;
+    }
+    // This last invocation may have spanned zero or more report periods;
+    // dispatch one realtime rate message for each period.
+    for (int i = 0; i < report.period_count; ++i) {
+      // Note: report.rate may be infinity. The javascript chart will draw a
+      // saturated column for that rate value (which will eventually be pushed
+      // off the screen) -- but the record of the (smallest, largest) values in
+      // the chart will persist in showing infinity, even when the column is no
+      // longer visible.
+      SetRealtimeRate(report.rate);
+    }
+  }
+
+  double GetSimulationTime() const {
+    DRAKE_DEMAND(IsThread(main_thread_id_));
+    return sim_time_;
   }
 
   // This function is public via the PIMPL.
@@ -818,8 +988,8 @@ class Meshcat::Impl {
     // them again for efficiency. We don't want to send meshes over the network
     // (which could be from the cloud to a local browser) more than necessary.
 
-    MeshcatShapeReifier reifier(&uuid_generator_, &file_storage_);
-    std::vector<std::shared_ptr<const FileStorage::Handle>> assets;
+    MeshcatShapeReifier reifier(&uuid_generator_, &file_storage_, rgba);
+    std::vector<std::shared_ptr<const MemoryFile>> assets;
     MeshcatShapeReifier::Output reifier_output{.lumped = data.object,
                                                .assets = assets};
     shape.Reify(&reifier, &reifier_output);
@@ -834,28 +1004,31 @@ class Meshcat::Impl {
       DRAKE_DEMAND(data.object.geometry != nullptr);
       meshfile_object.geometry = data.object.geometry->uuid;
 
-      auto material = std::make_unique<internal::MaterialData>();
-      material->uuid = uuid_generator_.GenerateRandom();
-      material->type = "MeshPhongMaterial";
-      material->color = ToMeshcatColor(rgba);
-      // TODO(russt): Most values are taken verbatim from meshcat-python.
-      material->reflectivity = 0.5;
-      material->side = SideOfFaceToRender::kDoubleSide;
-      // From meshcat-python: Three.js allows a material to have an opacity
-      // which is != 1, but to still be non - transparent, in which case the
-      // opacity only serves to desaturate the material's color. That's a
-      // pretty odd combination of things to want, so by default we just use
-      // the opacity value to decide whether to set transparent to True or
-      // False.
-      material->transparent = (rgba.a() != 1.0);
-      material->opacity = rgba.a();
-      material->linewidth = 1.0;
-      material->wireframe = false;
-      material->wireframeLineWidth = 1.0;
+      // Add a material if not already defined.
+      if (data.object.material == nullptr) {
+        auto material = std::make_unique<internal::MaterialData>();
+        material->uuid = uuid_generator_.GenerateRandom();
+        material->type = "MeshPhongMaterial";
+        material->color = ToMeshcatColor(rgba);
+        // TODO(russt): Most values are taken verbatim from meshcat-python.
+        material->reflectivity = 0.5;
+        material->side = SideOfFaceToRender::kDoubleSide;
+        // From meshcat-python: Three.js allows a material to have an opacity
+        // which is != 1, but to still be non - transparent, in which case the
+        // opacity only serves to desaturate the material's color. That's a
+        // pretty odd combination of things to want, so by default we just use
+        // the opacity value to decide whether to set transparent to True or
+        // False.
+        material->transparent = (rgba.a() != 1.0);
+        material->opacity = rgba.a();
+        material->linewidth = 1.0;
+        material->wireframe = false;
+        material->wireframeLineWidth = 1.0;
 
-      meshfile_object.uuid = uuid_generator_.GenerateRandom();
-      meshfile_object.material = material->uuid;
-      data.object.material = std::move(material);
+        meshfile_object.uuid = uuid_generator_.GenerateRandom();
+        meshfile_object.material = material->uuid;
+        data.object.material = std::move(material);
+      }
     }
 
     Defer([this, data = std::move(data), assets = std::move(assets)]() {
@@ -1011,31 +1184,9 @@ class Meshcat::Impl {
     internal::SetObjectData data;
     data.path = FullPath(path);
 
-    auto geometry = std::make_unique<internal::BufferGeometryData>();
-    geometry->uuid = uuid_generator_.GenerateRandom();
-    geometry->position = vertices.cast<float>();
-    geometry->faces = faces.cast<uint32_t>();
-    data.object.geometry = std::move(geometry);
-
-    auto material = std::make_unique<internal::MaterialData>();
-    material->uuid = uuid_generator_.GenerateRandom();
-    material->type = "MeshPhongMaterial";
-    material->color = ToMeshcatColor(rgba);
-    material->transparent = (rgba.a() != 1.0);
-    material->opacity = rgba.a();
-    material->wireframe = wireframe;
-    material->wireframeLineWidth = wireframe_line_width;
-    material->vertexColors = false;
-    material->side = side;
-    material->flatShading = true;
-    data.object.material = std::move(material);
-
-    internal::MeshData mesh;
-    mesh.uuid = uuid_generator_.GenerateRandom();
-    mesh.type = "Mesh";
-    mesh.geometry = data.object.geometry->uuid;
-    mesh.material = data.object.material->uuid;
-    data.object.object = std::move(mesh);
+    SetLumpedObjectFromTriangleMesh(&data.object, vertices, faces, rgba,
+                                    wireframe, wireframe_line_width, side,
+                                    &uuid_generator_);
 
     Defer([this, data = std::move(data)]() {
       std::stringstream message_stream;
@@ -1204,8 +1355,8 @@ class Meshcat::Impl {
           "Cannot open '{}' when attempting to set property '{}' on '{}'",
           file_path.string(), property, path));
     }
-    std::shared_ptr<const FileStorage::Handle> asset =
-        file_storage_.Insert(std::move(*content), file_path.string());
+    std::shared_ptr<const MemoryFile> asset = file_storage_.Insert(
+        std::move(*content), file_path.string());
 
     internal::SetPropertyData<std::string> data;
     data.path = FullPath(path);
@@ -1451,7 +1602,7 @@ class Meshcat::Impl {
   }
 
   // This function is public via the PIMPL.
-  void DeleteButton(std::string name) {
+  bool DeleteButton(std::string name, bool strict) {
     DRAKE_DEMAND(IsThread(main_thread_id_));
 
     internal::DeleteControl data;
@@ -1459,7 +1610,11 @@ class Meshcat::Impl {
       std::lock_guard<std::mutex> lock(controls_mutex_);
       auto iter = buttons_.find(name);
       if (iter == buttons_.end()) {
-        ThrowThingNotFound("button", name, buttons_);
+        if (strict) {
+          ThrowThingNotFound("button", name, buttons_);
+        } else {
+          return false;
+        }
       }
       buttons_.erase(iter);
       auto c_iter = std::find(controls_.begin(), controls_.end(), name);
@@ -1476,6 +1631,7 @@ class Meshcat::Impl {
       msgpack::pack(message_stream, data);
       app_->publish("all", message_stream.str(), uWS::OpCode::BINARY, false);
     });
+    return true;
   }
 
   // This function is public via the PIMPL.
@@ -1585,7 +1741,7 @@ class Meshcat::Impl {
   }
 
   // This function is public via the PIMPL.
-  void DeleteSlider(std::string name) {
+  bool DeleteSlider(std::string name, bool strict) {
     DRAKE_DEMAND(IsThread(main_thread_id_));
 
     internal::DeleteControl data;
@@ -1593,7 +1749,11 @@ class Meshcat::Impl {
       std::lock_guard<std::mutex> lock(controls_mutex_);
       auto iter = sliders_.find(name);
       if (iter == sliders_.end()) {
-        ThrowThingNotFound("slider", name, sliders_);
+        if (strict) {
+          ThrowThingNotFound("slider", name, sliders_);
+        } else {
+          return false;
+        }
       }
       sliders_.erase(iter);
       auto c_iter = std::find(controls_.begin(), controls_.end(), name);
@@ -1610,6 +1770,7 @@ class Meshcat::Impl {
       msgpack::pack(message_stream, data);
       app_->publish("all", message_stream.str(), uWS::OpCode::BINARY, false);
     });
+    return true;
   }
 
   // This function is public via the PIMPL.
@@ -1625,10 +1786,10 @@ class Meshcat::Impl {
       sliders = sliders_;
     }
     for (auto iter = buttons.begin(); iter != buttons.end(); ++iter) {
-      DeleteButton(iter->first);
+      DeleteButton(iter->first, /* strict = */ true);
     }
     for (auto iter = sliders.begin(); iter != sliders.end(); ++iter) {
-      DeleteSlider(iter->first);
+      DeleteSlider(iter->first, /* strict = */ true);
     }
   }
 
@@ -1662,17 +1823,17 @@ class Meshcat::Impl {
     // Insert a JavaScript URL hook that knows how to serve the CAS database.
     // (See FileStorage and GetCasUrl for details about CAS.)
     std::string javascript("casAssets = {};\n");
-    std::vector<std::shared_ptr<const FileStorage::Handle>> assets =
+    std::vector<std::shared_ptr<const MemoryFile>> assets =
         file_storage_.DumpEverything();
     for (const auto& asset : assets) {
-      javascript += fmt::format("// {}\n", asset->filename_hint);
+      javascript += fmt::format("// {}\n", asset->filename_hint());
       javascript += fmt::format(
           "casAssets[\"{}\"] = "
           "\"data:application/octet-binary;base64,{}\";\n",
           FileStorage::GetCasUrl(*asset),
           common_robotics_utilities::base64_helpers::Encode(
-              std::vector<uint8_t>(asset->content.begin(),
-                                   asset->content.end())));
+              std::vector<uint8_t>(asset->contents().begin(),
+                                   asset->contents().end())));
     }
     javascript += R"""(
         MeshCat.THREE.DefaultLoadingManager.setURLModifier(url => {
@@ -1828,6 +1989,11 @@ class Meshcat::Impl {
         static_assert(kMaxFaultNumber == 3);
     }
     DRAKE_UNREACHABLE();
+  }
+
+  void InjectMockTimer(std::unique_ptr<Timer> timer) {
+    DRAKE_DEMAND(IsThread(main_thread_id_));
+    rate_calculator_.InjectMockTimer(std::move(timer));
   }
 
  private:
@@ -2049,8 +2215,7 @@ class Meshcat::Impl {
         response->end("");
         return;
       }
-      std::shared_ptr<const FileStorage::Handle> handle =
-          file_storage_.Find(*key);
+      std::shared_ptr<const MemoryFile> handle = file_storage_.Find(*key);
       if (handle == nullptr) {
         drake::log()->warn(
             "Meshcat: Unknown CAS key {} (there are {} assets in the cache)",
@@ -2060,11 +2225,11 @@ class Meshcat::Impl {
         response->end("");
         return;
       }
-      response->writeHeader("Meshcat-Cas-Filename", handle->filename_hint);
+      response->writeHeader("Meshcat-Cas-Filename", handle->filename_hint());
       // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control#immutable
       response->writeHeader("Cache-Control",
                             "public, max-age=604800, immutable");
-      response->end(handle->content);
+      response->end(handle->contents());
       return;
     }
     // Handle static (i.e., compiled-in) files.
@@ -2236,6 +2401,8 @@ class Meshcat::Impl {
   const MeshcatParams params_;
   int port_{};
   internal::UuidGenerator uuid_generator_{};
+  double sim_time_{};
+  systems::internal::RealtimeRateCalculator rate_calculator_;
   double realtime_rate_{0.0};
   bool is_orthographic_{false};
 
@@ -2341,8 +2508,9 @@ Meshcat::Meshcat(std::optional<int> port)
     : Meshcat(MeshcatParams{.port = port}) {}
 
 Meshcat::Meshcat(const MeshcatParams& params)
-    // Creates the server thread, bind to the port, etc.
-    : impl_{new Impl(params)} {
+    // The Impl constructor creates the server thread, binds to the port, etc.
+    : impl_{new Impl(params)},
+      recording_{std::make_unique<internal::MeshcatRecording>()} {
   drake::log()->info("Meshcat listening for connections at {}", web_url());
 }
 
@@ -2505,12 +2673,10 @@ void Meshcat::SetCamera(OrthographicCamera camera, std::string path) {
 
 void Meshcat::SetTransform(std::string_view path,
                            const RigidTransformd& X_ParentPath,
-                           const std::optional<double>& time) {
-  if (recording_ && time) {
-    animation_->SetTransform(animation_->frame(*time), std::string(path),
-                             X_ParentPath);
-  }
-  if (!recording_ || !time || set_visualizations_while_recording_) {
+                           std::optional<double> time_in_recording) {
+  const bool show_live =
+      recording_->SetTransform(path, X_ParentPath, time_in_recording);
+  if (show_live) {
     impl().SetTransform(path, X_ParentPath);
   }
 }
@@ -2524,6 +2690,14 @@ void Meshcat::Delete(std::string_view path) {
   impl().Delete(path);
 }
 
+void Meshcat::SetSimulationTime(double sim_time) {
+  impl().SetSimulationTime(sim_time);
+}
+
+double Meshcat::GetSimulationTime() const {
+  return impl().GetSimulationTime();
+}
+
 void Meshcat::SetRealtimeRate(double rate) {
   impl().SetRealtimeRate(rate);
 }
@@ -2533,40 +2707,35 @@ double Meshcat::GetRealtimeRate() const {
 }
 
 void Meshcat::SetProperty(std::string_view path, std::string property,
-                          bool value, const std::optional<double>& time) {
-  if (recording_ && time) {
-    animation_->SetProperty(animation_->frame(*time), std::string(path),
-                            property, value);
-  }
-  if (!recording_ || !time || set_visualizations_while_recording_) {
+                          bool value, std::optional<double> time_in_recording) {
+  const bool show_live =
+      recording_->SetProperty(path, property, value, time_in_recording);
+  if (show_live) {
     impl().SetProperty(path, std::move(property), value);
   }
 }
 
 void Meshcat::SetProperty(std::string_view path, std::string property,
-                          double value, const std::optional<double>& time) {
-  if (recording_ && time) {
-    animation_->SetProperty(animation_->frame(*time), std::string(path),
-                            property, value);
-  }
-  if (!recording_ || set_visualizations_while_recording_) {
+                          double value,
+                          std::optional<double> time_in_recording) {
+  const bool show_live =
+      recording_->SetProperty(path, property, value, time_in_recording);
+  if (show_live) {
     impl().SetProperty(path, std::move(property), value);
   }
 }
 
 void Meshcat::SetProperty(std::string_view path, std::string property,
                           const std::vector<double>& value,
-                          const std::optional<double>& time) {
-  if (recording_ && time) {
-    animation_->SetProperty(animation_->frame(*time), std::string(path),
-                            property, value);
-  }
-  if (!recording_ || set_visualizations_while_recording_) {
+                          std::optional<double> time_in_recording) {
+  const bool show_live =
+      recording_->SetProperty(path, property, value, time_in_recording);
+  if (show_live) {
     impl().SetProperty(path, std::move(property), value);
   }
 }
 
-void Meshcat::SetEnvironmentMap(const std::filesystem::path& image_path) {
+void Meshcat::SetEnvironmentMap(const fs::path& image_path) {
   const std::string_view property_path = "/Background/<object>";
   const std::string property_name = "environment_map";
   if (image_path.empty()) {
@@ -2610,8 +2779,8 @@ int Meshcat::GetButtonClicks(std::string_view name) const {
   return impl().GetButtonClicks(name);
 }
 
-void Meshcat::DeleteButton(std::string name) {
-  impl().DeleteButton(std::move(name));
+bool Meshcat::DeleteButton(std::string name, bool strict) {
+  return impl().DeleteButton(std::move(name), strict);
 }
 
 void Meshcat::AddSlider(std::string name, double min, double max, double step,
@@ -2633,8 +2802,8 @@ std::vector<std::string> Meshcat::GetSliderNames() const {
   return impl().GetSliderNames();
 }
 
-void Meshcat::DeleteSlider(std::string name) {
-  impl().DeleteSlider(std::move(name));
+bool Meshcat::DeleteSlider(std::string name, bool strict) {
+  return impl().DeleteSlider(std::move(name), strict);
 }
 
 void Meshcat::DeleteAddedControls() {
@@ -2651,30 +2820,28 @@ std::string Meshcat::StaticHtml() {
 
 void Meshcat::StartRecording(double frames_per_second,
                              bool set_visualizations_while_recording) {
-  animation_ = std::make_unique<MeshcatAnimation>(frames_per_second);
-  recording_ = true;
-  set_visualizations_while_recording_ = set_visualizations_while_recording;
+  recording_->StartRecording(frames_per_second,
+                             set_visualizations_while_recording);
+}
+
+void Meshcat::StopRecording() {
+  recording_->StopRecording();
 }
 
 void Meshcat::PublishRecording() {
-  impl().SetAnimation(*animation_);
+  impl().SetAnimation(recording_->get_animation());
 }
 
 void Meshcat::DeleteRecording() {
-  if (animation_) {
-    // Reset the recording.
-    double frames_per_second = animation_->frames_per_second();
-    animation_ = std::make_unique<MeshcatAnimation>(frames_per_second);
-  }
+  recording_->DeleteRecording();
+}
+
+const MeshcatAnimation& Meshcat::get_recording() const {
+  return recording_->get_animation();
 }
 
 MeshcatAnimation& Meshcat::get_mutable_recording() {
-  if (!animation_) {
-    throw std::runtime_error(
-        "You must create a recording (via StartRecording) before calling "
-        "get_mutable_recording");
-  }
-  return *animation_;
+  return recording_->get_mutable_animation();
 }
 
 bool Meshcat::HasPath(std::string_view path) const {
@@ -2700,6 +2867,10 @@ void Meshcat::InjectWebsocketMessage(std::string_view message) {
 
 void Meshcat::InjectWebsocketThreadFault(int fault_number) {
   impl().InjectWebsocketThreadFault(fault_number);
+}
+
+void Meshcat::InjectMockTimer(std::unique_ptr<Timer> timer) {
+  impl().InjectMockTimer(std::move(timer));
 }
 
 }  // namespace geometry

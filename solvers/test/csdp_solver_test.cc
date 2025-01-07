@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
+#include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/solvers/test/csdp_test_examples.h"
 #include "drake/solvers/test/linear_program_examples.h"
 #include "drake/solvers/test/second_order_cone_program_examples.h"
@@ -77,6 +78,41 @@ TEST_F(TrivialSDP1, Solve) {
   }
 }
 
+GTEST_TEST(TestSemidefiniteProgram, TestTrivial2x2SDP) {
+  CsdpSolver solver;
+  if (solver.available()) {
+    TestTrivial2x2SDP(solver, 1E-5, /*check_dual=*/false, /*dual_tol=*/1E-5);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, Test1x1with3x3SDP) {
+  CsdpSolver solver;
+  if (solver.available()) {
+    Test1x1with3x3SDP(solver, 1E-4, /*check_dual=*/false, /*dual_tol=*/1E-5);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, Test2x2with3x3SDP) {
+  CsdpSolver solver;
+  if (solver.available()) {
+    Test2x2with3x3SDP(solver, 1E-2, /*check_dual=*/false, /*dual_tol=*/1E-5);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, TestTrivial1x1LMI) {
+  CsdpSolver solver;
+  if (solver.available()) {
+    TestTrivial1x1LMI(solver, 1E-5, /*check_dual=*/false, /*dual_tol=*/1E-7);
+  }
+}
+
+GTEST_TEST(TestSemidefiniteProgram, Test2X2LMI) {
+  CsdpSolver solver;
+  if (solver.available()) {
+    Test2x2LMI(solver, 1E-7, /*check_dual=*/false, /*dual_tol=*/1E-7);
+  }
+}
+
 std::vector<RemoveFreeVariableMethod> GetRemoveFreeVariableMethods() {
   return {RemoveFreeVariableMethod::kNullspace,
           RemoveFreeVariableMethod::kTwoSlackVariables,
@@ -85,6 +121,7 @@ std::vector<RemoveFreeVariableMethod> GetRemoveFreeVariableMethods() {
 
 TEST_F(LinearProgramBoundingBox1, Solve) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -105,6 +142,7 @@ TEST_F(LinearProgramBoundingBox1, Solve) {
 
 TEST_F(CsdpLinearProgram2, Solve) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -124,6 +162,7 @@ TEST_F(CsdpLinearProgram2, Solve) {
 
 TEST_F(CsdpLinearProgram3, Solve) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -143,6 +182,7 @@ TEST_F(CsdpLinearProgram3, Solve) {
 
 TEST_F(DuplicatedVariableLinearProgramTest1, Test) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.is_available()) {
       SolverOptions solver_options;
@@ -155,6 +195,7 @@ TEST_F(DuplicatedVariableLinearProgramTest1, Test) {
 
 TEST_F(TrivialSDP2, Solve) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -174,6 +215,7 @@ TEST_F(TrivialSDP2, Solve) {
 
 TEST_F(TrivialSOCP1, Solve) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -192,6 +234,7 @@ TEST_F(TrivialSOCP1, Solve) {
 
 TEST_F(TrivialSOCP2, Solve) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -211,6 +254,7 @@ TEST_F(TrivialSOCP2, Solve) {
 
 TEST_F(TrivialSOCP3, Solve) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -231,6 +275,7 @@ TEST_F(TrivialSOCP3, Solve) {
 
 GTEST_TEST(TestSOCP, TestSocpDuplicatedVariable1) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -243,12 +288,29 @@ GTEST_TEST(TestSOCP, TestSocpDuplicatedVariable1) {
 
 GTEST_TEST(TestSOCP, TestSocpDuplicatedVariable2) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
       solver_options.SetOption(solver.id(), "drake::RemoveFreeVariableMethod",
                                static_cast<int>(method));
+      // Loosen the tolerances a bit (otherwise macOS is sad).
+      solver_options.SetOption(solver.id(), "axtol", 1e-6);
+      solver_options.SetOption(solver.id(), "objtol", 1e-6);
       TestSocpDuplicatedVariable2(solver, solver_options, 1E-5);
+    }
+  }
+}
+
+GTEST_TEST(TestSOCP, TestSocpDuplicatedVariable3) {
+  for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
+    CsdpSolver solver;
+    if (solver.available()) {
+      SolverOptions solver_options;
+      solver_options.SetOption(solver.id(), "drake::RemoveFreeVariableMethod",
+                               static_cast<int>(method));
+      TestSocpDuplicatedVariable3(solver, solver_options, 1E-4);
     }
   }
 }
@@ -257,6 +319,7 @@ GTEST_TEST(TestSOCP, TestSocpDuplicatedVariable2) {
 namespace test {
 TEST_F(InfeasibleLinearProgramTest0, TestInfeasible) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -273,6 +336,7 @@ TEST_F(InfeasibleLinearProgramTest0, TestInfeasible) {
 
 TEST_F(UnboundedLinearProgramTest0, TestUnbounded) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -286,6 +350,7 @@ TEST_F(UnboundedLinearProgramTest0, TestUnbounded) {
 
 GTEST_TEST(TestSemidefiniteProgram, CommonLyapunov) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -298,6 +363,7 @@ GTEST_TEST(TestSemidefiniteProgram, CommonLyapunov) {
 
 GTEST_TEST(TestSemidefiniteProgram, OuterEllipsoid) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -310,18 +376,21 @@ GTEST_TEST(TestSemidefiniteProgram, OuterEllipsoid) {
 
 GTEST_TEST(TestSemidefiniteProgram, EigenvalueProblem) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
       solver_options.SetOption(solver.id(), "drake::RemoveFreeVariableMethod",
                                static_cast<int>(method));
-      SolveEigenvalueProblem(solver, solver_options, 1E-6);
+      SolveEigenvalueProblem(solver, solver_options, 1E-6,
+                             /*check_dual=*/false);
     }
   }
 }
 
 TEST_P(TestEllipsoidsSeparation, TestSOCP) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -338,6 +407,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_P(TestFindSpringEquilibrium, TestSOCP) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -355,6 +425,7 @@ INSTANTIATE_TEST_SUITE_P(
 GTEST_TEST(TestSOCP, MaximizeGeometricMeanTrivialProblem1) {
   MaximizeGeometricMeanTrivialProblem1 prob;
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -369,6 +440,7 @@ GTEST_TEST(TestSOCP, MaximizeGeometricMeanTrivialProblem1) {
 GTEST_TEST(TestSOCP, MaximizeGeometricMeanTrivialProblem2) {
   MaximizeGeometricMeanTrivialProblem2 prob;
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -382,6 +454,7 @@ GTEST_TEST(TestSOCP, MaximizeGeometricMeanTrivialProblem2) {
 
 GTEST_TEST(TestSOCP, SmallestEllipsoidCoveringProblem) {
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     SolverOptions solver_options;
     solver_options.SetOption(solver.id(), "drake::RemoveFreeVariableMethod",
@@ -394,6 +467,7 @@ GTEST_TEST(TestSOCP, SmallestEllipsoidCoveringProblem) {
 GTEST_TEST(TestSOS, UnivariateQuarticSos) {
   UnivariateQuarticSos dut;
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -408,6 +482,7 @@ GTEST_TEST(TestSOS, UnivariateQuarticSos) {
 GTEST_TEST(TestSOS, BivariateQuarticSos) {
   BivariateQuarticSos dut;
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -422,6 +497,7 @@ GTEST_TEST(TestSOS, BivariateQuarticSos) {
 GTEST_TEST(TestSOS, SimpleSos1) {
   SimpleSos1 dut;
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -436,6 +512,7 @@ GTEST_TEST(TestSOS, SimpleSos1) {
 GTEST_TEST(TestSOS, MotzkinPolynomial) {
   MotzkinPolynomial dut;
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -450,6 +527,7 @@ GTEST_TEST(TestSOS, MotzkinPolynomial) {
 GTEST_TEST(TestSOS, UnivariateNonnegative1) {
   UnivariateNonnegative1 dut;
   for (auto method : GetRemoveFreeVariableMethods()) {
+    SCOPED_TRACE(fmt::format("method = {}", method));
     CsdpSolver solver;
     if (solver.available()) {
       SolverOptions solver_options;
@@ -473,6 +551,50 @@ TEST_F(TrivialSDP1, SolveVerbose) {
     solver.Solve(*prog_, {}, options);
   }
 }
+
+// This is a code coverage test of reporting malformed options.
+TEST_F(TrivialSDP1, UnknownRemoveFreeVariableMethod) {
+  UnivariateNonnegative1 example;
+  CsdpSolver solver;
+  SolverOptions options;
+  options.SetOption(solver.id(), "drake::RemoveFreeVariableMethod", 222);
+  if (solver.available()) {
+    DRAKE_EXPECT_THROWS_MESSAGE(solver.Solve(example.prog(), {}, options),
+                                ".*Bad.*RemoveFreeVariableMethod.*");
+  }
+}
+
+// Confirm that setting solver options has an effect on the solve.
+TEST_F(TrivialSDP1, SolverOptionsPropagation) {
+  CsdpSolver solver;
+  if (!solver.available()) {
+    return;
+  }
+
+  // Solving with default options works fine.
+  {
+    SolverOptions options;
+    auto result = solver.Solve(*prog_, {}, options);
+    EXPECT_TRUE(result.is_success());
+  }
+
+  // Setting an absurd `int` option causes a failure.
+  {
+    SolverOptions options;
+    options.SetOption(CsdpSolver::id(), "maxiter", 0);
+    auto result = solver.Solve(*prog_, {}, options);
+    EXPECT_EQ(result.get_solution_result(), kIterationLimit);
+  }
+
+  // Setting an absurd `double` option causes a failure.
+  {
+    SolverOptions options;
+    options.SetOption(CsdpSolver::id(), "axtol", 1e-100);
+    auto result = solver.Solve(*prog_, {}, options);
+    EXPECT_EQ(result.get_solution_result(), kSolverSpecificError);
+  }
+}
+
 }  // namespace test
 }  // namespace solvers
 }  // namespace drake

@@ -46,14 +46,9 @@ ONE_HOUR = 1 * 60 * 60
 
 LATEST_PATTERN = re.compile(r"latest(-(?P<offset>\d+))?$")
 
-LAST_GREEN_COMMIT_BASE_PATH = (
-    "https://storage.googleapis.com/bazel-untrusted-builds/last_green_commit/"
+LAST_GREEN_COMMIT_PATH = (
+    "https://storage.googleapis.com/bazel-builds/last_green_commit/github.com/bazelbuild/bazel.git/publish-bazel-binaries"
 )
-
-LAST_GREEN_COMMIT_PATH_SUFFIXES = {
-    "last_green": "github.com/bazelbuild/bazel.git/bazel-bazel",
-    "last_downstream_green": "downstream_pipeline",
-}
 
 BAZEL_GCS_PATH_PATTERN = (
     "https://storage.googleapis.com/bazel-builds/artifacts/{platform}/{commit}/bazel"
@@ -67,29 +62,48 @@ BAZEL_REAL = "BAZEL_REAL"
 
 BAZEL_UPSTREAM = "bazelbuild"
 
+_dotfiles_dict = None
 
-def get_env_or_config(name, default=None):
-    """Reads a configuration value from the environment, but falls back to
-    reading it from .bazeliskrc in the workspace root.
+
+def get_dotfiles_dict():
+    """Loads all supported dotfiles and returns a unified name=value dictionary
+    for their config settings. The dictionary is only loaded on the first call
+    to this function; subsequent calls used a cached result, so won't change.
     """
-    if name in os.environ:
-        return os.environ[name]
+    global _dotfiles_dict
+    if _dotfiles_dict is not None:
+        return _dotfiles_dict
+    _dotfiles_dict = dict()
     env_files = []
+    # Here we're only checking the workspace root. Ideally, we would also check
+    # the user's home directory to match the Go version. When making that edit,
+    # be sure to obey the correctly prioritization of workspace / home rcfiles.
     root = find_workspace_root()
     if root:
         env_files.append(os.path.join(root, ".bazeliskrc"))
     for env_file in env_files:
         try:
             with open(env_file, "r") as f:
-                for line in f.readlines():
-                    line = line.split("#", 1)[0].strip()
-                    if not line:
-                        continue
-                    some_name, some_value = line.split("=", 1)
-                    if some_name == name:
-                        return some_value
+                rcdata = f.read()
         except Exception:
-            pass
+            continue
+        for line in rcdata.splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            some_name, some_value = line.split("=", 1)
+            _dotfiles_dict[some_name] = some_value
+    return _dotfiles_dict
+
+
+def get_env_or_config(name, default=None):
+    """Reads a configuration value from the environment, but falls back to
+    reading it from .bazeliskrc in the workspace root."""
+    if name in os.environ:
+        return os.environ[name]
+    dotfiles = get_dotfiles_dict()
+    if name in dotfiles:
+        return dotfiles[name]
     return default
 
 
@@ -113,7 +127,10 @@ def decide_which_bazel_version_to_use():
         bazelversion_path = os.path.join(workspace_root, ".bazelversion")
         if os.path.exists(bazelversion_path):
             with open(bazelversion_path, "r") as f:
-                return f.read().strip()
+                for ln in f.readlines():
+                    ln = ln.strip()
+                    if ln:
+                        return ln
 
     return "latest"
 
@@ -142,9 +159,8 @@ def resolve_version_label_to_number_or_commit(bazelisk_directory, version):
             of an unreleased Bazel binary,
         2. An indicator for whether the returned version refers to a commit.
     """
-    suffix = LAST_GREEN_COMMIT_PATH_SUFFIXES.get(version)
-    if suffix:
-        return get_last_green_commit(suffix), True
+    if version == "last_green":
+        return get_last_green_commit(), True
 
     if "latest" in version:
         match = LATEST_PATTERN.match(version)
@@ -163,8 +179,11 @@ def resolve_version_label_to_number_or_commit(bazelisk_directory, version):
     return version, False
 
 
-def get_last_green_commit(path_suffix):
-    return read_remote_text_file(LAST_GREEN_COMMIT_BASE_PATH + path_suffix).strip()
+def get_last_green_commit():
+    commit = read_remote_text_file(LAST_GREEN_COMMIT_PATH).strip()
+    if not re.match(r"^[0-9a-f]{40}$", commit):
+        raise Exception("Invalid commit hash: {}".format(commit))
+    return commit
 
 
 def get_releases_json(bazelisk_directory):

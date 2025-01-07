@@ -76,35 +76,6 @@ void AddBoundingBoxConstraintsImpliedByRollPitchYawLimits(
     prog->AddBoundingBoxConstraint(0, 1, R(2, 2));
 }
 
-void AddBoundingBoxConstraintsImpliedByRollPitchYawLimitsToBinary(
-    MathematicalProgram* prog,
-    const Eigen::Ref<const MatrixDecisionVariable<3, 3>>& B,
-    RollPitchYawLimits limits) {
-  if ((limits & kPitch_NegPI_2_to_PI_2) && (limits & kYaw_NegPI_2_to_PI_2))
-    prog->AddBoundingBoxConstraint(1, 1, B(0, 0));
-
-  if ((limits & kPitch_NegPI_2_to_PI_2) && (limits & kYaw_0_to_PI))
-    prog->AddBoundingBoxConstraint(1, 1, B(1, 0));
-
-  if (limits & kPitch_0_to_PI) prog->AddBoundingBoxConstraint(0, 0, B(2, 0));
-
-  if ((limits & kRoll_NegPI_2_to_PI_2) && (limits & kYaw_NegPI_2_to_PI_2) &&
-      (limits & kPitch_0_to_PI) && (limits & kRoll_0_to_PI) &&
-      (limits & kYaw_0_to_PI))
-    prog->AddBoundingBoxConstraint(1, 1, B(1, 1));
-
-  if ((limits & kPitch_NegPI_2_to_PI_2) && (limits & kRoll_0_to_PI))
-    prog->AddBoundingBoxConstraint(1, 1, B(2, 1));
-
-  if ((limits & kRoll_0_to_PI) && (limits & kYaw_0_to_PI) &&
-      (limits & kRoll_NegPI_2_to_PI_2) && (limits & kYaw_NegPI_2_to_PI_2) &&
-      (limits & kPitch_0_to_PI))
-    prog->AddBoundingBoxConstraint(1, 1, B(0, 2));
-
-  if ((limits & kPitch_NegPI_2_to_PI_2) && (limits & kRoll_NegPI_2_to_PI_2))
-    prog->AddBoundingBoxConstraint(1, 1, B(2, 2));
-}
-
 void AddRotationMatrixSpectrahedralSdpConstraint(
     MathematicalProgram* prog,
     const Eigen::Ref<const MatrixDecisionVariable<3, 3>>& R) {
@@ -119,7 +90,7 @@ void AddRotationMatrixSpectrahedralSdpConstraint(
     R(1, 2) + R(2, 1), R(0, 1) + R(1, 0), R(2, 0) - R(0, 2), 1 - R(0, 0) + R(1, 1) - R(2, 2); // #NOLINT
   // clang-format on
 
-  prog->AddPositiveSemidefiniteConstraint(M);
+  prog->AddLinearMatrixInequalityConstraint(M);
 }
 
 namespace {

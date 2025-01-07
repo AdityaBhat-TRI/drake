@@ -19,7 +19,7 @@ MosekSolver::MosekSolver()
 MosekSolver::~MosekSolver() = default;
 
 SolverId MosekSolver::id() {
-  static const never_destroyed<SolverId> singleton{"Mosek"};
+  static const never_destroyed<SolverId> singleton{"MOSEK"};
   return singleton.access();
 }
 
@@ -45,7 +45,7 @@ bool CheckAttributes(const MathematicalProgram& prog,
           ProgramAttribute::kPositiveSemidefiniteConstraint,
           ProgramAttribute::kExponentialConeConstraint,
           ProgramAttribute::kLinearCost, ProgramAttribute::kQuadraticCost,
-          ProgramAttribute::kBinaryVariable});
+          ProgramAttribute::kL2NormCost, ProgramAttribute::kBinaryVariable});
   return internal::CheckConvexSolverAttributes(
       prog, solver_capabilities.access(), "MosekSolver", explanation);
 }

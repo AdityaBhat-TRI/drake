@@ -81,7 +81,7 @@ class PiecewisePolynomial final : public PiecewiseTrajectory<T> {
   PiecewisePolynomial() = default;
 
   // We are final, so this is okay.
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(PiecewisePolynomial)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(PiecewisePolynomial);
 
   typedef MatrixX<Polynomial<T>> PolynomialMatrix;
 
@@ -181,9 +181,7 @@ class PiecewisePolynomial final : public PiecewiseTrajectory<T> {
                       const std::vector<T>& breaks);
   // @}
 
-  ~PiecewisePolynomial() override = default;
-
-  std::unique_ptr<Trajectory<T>> Clone() const override;
+  ~PiecewisePolynomial() final;
 
   /**
    * @anchor coefficient_construction_methods
@@ -512,9 +510,9 @@ class PiecewisePolynomial final : public PiecewiseTrajectory<T> {
    * @warning See warning in the @ref polynomial_warning "constructor overview"
    *          above.
    */
-  MatrixX<T> value(const T& t) const override {
-    const int derivative_order = 0;
-    return DoEvalDerivative(t, derivative_order);
+  MatrixX<T> value(const T& t) const final {
+    // We shadowed the base class to add documentation, not to change logic.
+    return PiecewiseTrajectory<T>::value(t);
   }
 
   /**
@@ -545,13 +543,19 @@ class PiecewisePolynomial final : public PiecewiseTrajectory<T> {
    * Returns the row count of the output matrices.
    * @throws std::exception if empty().
    */
-  Eigen::Index rows() const override;
+  Eigen::Index rows() const final {
+    // We shadowed the base class to add documentation, not to change logic.
+    return PiecewiseTrajectory<T>::rows();
+  }
 
   /**
    * Returns the column count of the output matrices.
    * @throws std::exception if empty().
    */
-  Eigen::Index cols() const override;
+  Eigen::Index cols() const final {
+    // We shadowed the base class to add documentation, not to change logic.
+    return PiecewiseTrajectory<T>::cols();
+  }
 
   /**
    * Reshapes the dimensions of the Eigen::MatrixX<T> returned by value(),
@@ -745,6 +749,26 @@ class PiecewisePolynomial final : public PiecewiseTrajectory<T> {
    */
   void shiftRight(const T& offset);
 
+  /** Adds a break at the specified time. It does not change the value of the
+   * trajectory at any point but the number of segments increases by 1.
+   * @returns the index of the new break.
+   * @throws std::exception if `new_break` is not within the trajectory's
+   *        time range.
+   * @warning If `new_break` is within PiecewiseTrajectory::kEpsilonTime from
+   *         an existing break, the new break will be silently ignored. Returns
+   *        the index of the existing break.
+   *
+   */
+  int AddBreak(const T& new_break);
+
+  /** Slices the trajectory within a specified time range.
+   * q = p.SliceByTime(t1, t2) returns a PiecewisePolynomial q such that
+   * q.start_time() = t1, q.end_time() = t2, and q(t) = p(t) for t1 <= t <= t2.
+   * @throws std::exception if `start_time` or `end_time` is not within the
+   *        trajectory's time range.
+   */
+  PiecewisePolynomial SliceByTime(const T& start_time, const T& end_time) const;
+
   /**
    * Replaces the specified block of the PolynomialMatrix at the given
    * segment index.
@@ -784,19 +808,25 @@ class PiecewisePolynomial final : public PiecewiseTrajectory<T> {
   }
 
  private:
+  // Trajectory overrides.
+  std::unique_ptr<Trajectory<T>> DoClone() const final;
+  MatrixX<T> do_value(const T& t) const final {
+    const int derivative_order = 0;
+    return DoEvalDerivative(t, derivative_order);
+  }
   // Evaluates the %PiecwisePolynomial derivative at the given time @p t.
   // Returns the nth derivative, where `n` is the value of @p derivative_order.
   //
   // @warning This method comes with the same caveats as value(). See value()
   // @pre derivative_order must be non-negative.
-  MatrixX<T> DoEvalDerivative(const T& t, int derivative_order) const override;
-
+  MatrixX<T> DoEvalDerivative(const T& t, int derivative_order) const final;
   std::unique_ptr<Trajectory<T>> DoMakeDerivative(
-      int derivative_order) const override {
+      int derivative_order) const final {
     return derivative(derivative_order).Clone();
   }
-
-  bool do_has_derivative() const override { return true; }
+  bool do_has_derivative() const final { return true; }
+  Eigen::Index do_rows() const final;
+  Eigen::Index do_cols() const final;
 
   T EvaluateSegmentAbsoluteTime(int segment_index, const T& t, Eigen::Index row,
                                 Eigen::Index col,
@@ -875,4 +905,4 @@ class PiecewisePolynomial final : public PiecewiseTrajectory<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::PiecewisePolynomial)
+    class drake::trajectories::PiecewisePolynomial);

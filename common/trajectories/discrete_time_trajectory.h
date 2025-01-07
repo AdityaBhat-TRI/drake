@@ -58,7 +58,7 @@ template <typename T>
 class DiscreteTimeTrajectory final : public Trajectory<T> {
  public:
   // We are final, so this is okay.
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(DiscreteTimeTrajectory)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(DiscreteTimeTrajectory);
 
   /** Default constructor creates the empty trajectory. */
   DiscreteTimeTrajectory() = default;
@@ -86,6 +86,8 @@ class DiscreteTimeTrajectory final : public Trajectory<T> {
                          double time_comparison_tolerance =
                              std::numeric_limits<double>::epsilon());
 
+  ~DiscreteTimeTrajectory() final;
+
   /** Converts the discrete-time trajectory using
   PiecewisePolynomial<T>::ZeroOrderHold(). */
   PiecewisePolynomial<T> ToZeroOrderHold() const;
@@ -102,31 +104,51 @@ class DiscreteTimeTrajectory final : public Trajectory<T> {
   /** Returns the times where the trajectory value is defined. */
   const std::vector<T>& get_times() const;
 
-  /** Returns a deep copy of the trajectory. */
-  std::unique_ptr<Trajectory<T>> Clone() const override;
-
   /** Returns the value of the trajectory at @p t.
   @throws std::exception if t is not within tolerance of one of the sample
   times. */
-  MatrixX<T> value(const T& t) const override;
+  MatrixX<T> value(const T& t) const final {
+    // We shadowed the base class to add documentation, not to change logic.
+    return Trajectory<T>::value(t);
+  }
 
   /** Returns the number of rows in the MatrixX<T> returned by value().
   @pre num_times() > 0. */
-  Eigen::Index rows() const override;
+  Eigen::Index rows() const final {
+    // We shadowed the base class to add documentation, not to change logic.
+    return Trajectory<T>::rows();
+  }
 
   /** Returns the number of cols in the MatrixX<T> returned by value().
   @pre num_times() > 0. */
-  Eigen::Index cols() const override;
+  Eigen::Index cols() const final {
+    // We shadowed the base class to add documentation, not to change logic.
+    return Trajectory<T>::cols();
+  }
 
   /** Returns the minimum value of get_times().
   @pre num_times() > 0. */
-  T start_time() const override;
+  T start_time() const final {
+    // We shadowed the base class to add documentation, not to change logic.
+    return Trajectory<T>::start_time();
+  }
 
   /** Returns the maximum value of get_times().
   @pre num_times() > 0. */
-  T end_time() const override;
+  T end_time() const final {
+    // We shadowed the base class to add documentation, not to change logic.
+    return Trajectory<T>::end_time();
+  }
 
  private:
+  // Trajectory overrides.
+  std::unique_ptr<Trajectory<T>> DoClone() const final;
+  MatrixX<T> do_value(const T& t) const final;
+  Eigen::Index do_rows() const final;
+  Eigen::Index do_cols() const final;
+  T do_start_time() const final;
+  T do_end_time() const final;
+
   std::vector<T> times_;
   std::vector<MatrixX<T>> values_;
   double time_comparison_tolerance_{};
@@ -136,4 +158,4 @@ class DiscreteTimeTrajectory final : public Trajectory<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::DiscreteTimeTrajectory)
+    class drake::trajectories::DiscreteTimeTrajectory);

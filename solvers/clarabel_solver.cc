@@ -1,15 +1,20 @@
 #include "drake/solvers/clarabel_solver.h"
 
+#include <fstream>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <Clarabel>
 #include <Eigen/Eigen>
+#include <fmt/ranges.h>
 
+#include "drake/common/fmt_eigen.h"
 #include "drake/common/name_value.h"
 #include "drake/common/ssize.h"
 #include "drake/common/text_logging.h"
+#include "drake/math/matrix_util.h"
 #include "drake/solvers/aggregate_costs_constraints.h"
 #include "drake/solvers/scs_clarabel_common.h"
 #include "drake/tools/workspace/clarabel_cpp_internal/serialize.h"
@@ -148,120 +153,6 @@ void SetSolverDetails(
   solver_details->status = SolverStatusToString(clarabel_solution.status);
 }
 
-class SettingsConverter {
- public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SettingsConverter);
-
-  // When `use_nerfed_default_tolerances` is true, we use looser tolerance
-  // defaults to help reduce the possiblity of Clarabel crashing the entire
-  // process due to https://github.com/oxfordcontrol/Clarabel.rs/issues/66.
-  // We should remove this nerf after Clarabel is fixed.
-  SettingsConverter(const SolverOptions& solver_options,
-                    bool use_nerfed_default_tolerances) {
-    // N.B. We must adjust our default values before starting to process the
-    // user's requested `solver_options`.
-    if (use_nerfed_default_tolerances) {
-      drake::log()->debug(
-          "ClarabelSolver is using loosened default tolerances due to the "
-          "presence of SDP and Exponential Cone Constraints. This is done to "
-          "prevent numerical issues from potentially crashing your program "
-          "due to https://github.com/oxfordcontrol/Clarabel.rs/issues/66. "
-          "If you need to solve your program to high precision, consider "
-          "manually setting SolverOptions for 'tol_gap_abs', 'tol_gap_rel', "
-          "and 'tol_feas'. Values set in SolverOptions take prececence over "
-          "the defaults");
-      settings_.tol_gap_abs *= 100.0;
-      settings_.tol_gap_rel *= 100.0;
-      settings_.tol_feas *= 100.0;
-    }
-
-    // Propagate Drake's common options into `settings_`.
-    settings_.verbose = solver_options.get_print_to_console();
-    // TODO(jwnimmer-tri) Handle get_print_file_name().
-
-    // Copy the Clarabel-specific `solver_options` to pending maps.
-    pending_options_double_ =
-        solver_options.GetOptionsDouble(ClarabelSolver::id());
-    pending_options_int_ = solver_options.GetOptionsInt(ClarabelSolver::id());
-    pending_options_str_ = solver_options.GetOptionsStr(ClarabelSolver::id());
-
-    // Move options from `pending_..._` to `settings_`.
-    Serialize(this, settings_);
-
-    // Identify any unsupported names (i.e., any leftovers in `pending_..._`).
-    std::vector<std::string> unknown_names;
-    for (const auto& [name, _] : pending_options_double_) {
-      unknown_names.push_back(name);
-    }
-    for (const auto& [name, _] : pending_options_int_) {
-      unknown_names.push_back(name);
-    }
-    for (const auto& [name, _] : pending_options_str_) {
-      unknown_names.push_back(name);
-    }
-    if (unknown_names.size() > 0) {
-      throw std::logic_error(fmt::format(
-          "ClarabelSolver: unrecognized solver options {}. Please check "
-          "https://oxfordcontrol.github.io/ClarabelDocs/stable/api_settings/ "
-          "for the supported solver options.",
-          fmt::join(unknown_names, ", ")));
-    }
-  }
-
-  const clarabel::DefaultSettings<double>& settings() const {
-    return settings_;
-  }
-
-  void Visit(const NameValue<double>& x) {
-    this->SetFromDoubleMap(x.name(), x.value());
-  }
-  void Visit(const NameValue<bool>& x) {
-    auto it = pending_options_int_.find(x.name());
-    if (it != pending_options_int_.end()) {
-      const int option_value = it->second;
-      DRAKE_THROW_UNLESS(option_value == 0 || option_value == 1);
-    }
-    this->SetFromIntMap(x.name(), x.value());
-  }
-  void Visit(const NameValue<uint32_t>& x) {
-    auto it = pending_options_int_.find(x.name());
-    if (it != pending_options_int_.end()) {
-      const int option_value = it->second;
-      DRAKE_THROW_UNLESS(option_value >= 0);
-    }
-    this->SetFromIntMap(x.name(), x.value());
-  }
-  void Visit(const NameValue<clarabel::ClarabelDirectSolveMethods>& x) {
-    DRAKE_THROW_UNLESS(x.name() == std::string{"direct_solve_method"});
-    // TODO(jwnimmer-tri) Add support for this option.
-    // For now it is unsupported and will throw (as an unknown name, below).
-  }
-
- private:
-  void SetFromDoubleMap(const char* name, double* clarabel_value) {
-    auto it = pending_options_double_.find(name);
-    if (it != pending_options_double_.end()) {
-      *clarabel_value = it->second;
-      pending_options_double_.erase(it);
-    }
-  }
-  template <typename T>
-  void SetFromIntMap(const char* name, T* clarabel_value) {
-    auto it = pending_options_int_.find(name);
-    if (it != pending_options_int_.end()) {
-      *clarabel_value = it->second;
-      pending_options_int_.erase(it);
-    }
-  }
-
-  std::unordered_map<std::string, double> pending_options_double_;
-  std::unordered_map<std::string, int> pending_options_int_;
-  std::unordered_map<std::string, std::string> pending_options_str_;
-
-  clarabel::DefaultSettings<double> settings_ =
-      clarabel::DefaultSettingsBuilder<double>::default_settings().build();
-};
-
 // See ParseBoundingBoxConstraints for the meaning of bbcon_dual_indices.
 void SetBoundingBoxDualSolution(
     const MathematicalProgram& prog,
@@ -310,16 +201,90 @@ void SetBoundingBoxDualSolution(
   }
 }
 
+void WriteClarabelReproduction(
+    std::string filename, const Eigen::SparseMatrix<double>& P,
+    const Eigen::Map<Eigen::VectorXd>& q_vec,
+    const Eigen::SparseMatrix<double>& A,
+    const Eigen::Map<Eigen::VectorXd>& b_vec,
+    const std::vector<clarabel::SupportedConeT<double>>& cones) {
+  std::ofstream out_file(filename);
+  if (!out_file.is_open()) {
+    log()->error(
+        "Failed to open kStandaloneReproductionFileName {} for writing; no "
+        "reproduction will be generated.");
+    return;
+  }
+
+  out_file << fmt::format(
+      R"""(
+import clarabel
+import numpy as np
+from scipy import sparse
+
+q = [{}]
+b = [{}]
+)""",
+      fmt::join(q_vec.data(), q_vec.data() + q_vec.size(), ", "),
+      fmt::join(b_vec.data(), b_vec.data() + b_vec.size(), ", "));
+  out_file << math::GeneratePythonCsc(P, "P");
+  out_file << math::GeneratePythonCsc(A, "A");
+  out_file << "cones = [" << std::endl;
+
+  for (const clarabel::SupportedConeT<double>& cone : cones) {
+    switch (cone.tag) {
+      case clarabel::SupportedConeT<double>::Tag::ZeroConeT:
+        out_file << "  clarabel.ZeroConeT(" << cone.nvars() << "),"
+                 << std::endl;
+        break;
+      case clarabel::SupportedConeT<double>::Tag::NonnegativeConeT:
+        out_file << "  clarabel.NonnegativeConeT(" << cone.nvars() << "),"
+                 << std::endl;
+        break;
+      case clarabel::SupportedConeT<double>::Tag::SecondOrderConeT:
+        out_file << "  clarabel.SecondOrderConeT(" << cone.nvars() << "),"
+                 << std::endl;
+        break;
+      case clarabel::SupportedConeT<double>::Tag::PSDTriangleConeT:
+        {
+          const clarabel::PSDTriangleConeT<double>* psd_cone =
+              static_cast<const clarabel::PSDTriangleConeT<double>*>(&cone);
+          out_file << "  clarabel.PSDTriangleConeT(" << psd_cone->dimension()
+                  << ")," << std::endl;
+        }
+        break;
+      case clarabel::SupportedConeT<double>::Tag::ExponentialConeT:
+        out_file << "  clarabel.ExponentialConeT()," << std::endl;
+        break;
+      default:
+        log()->error(
+            "WriteClarabelReproduction: Found unsupported cone type; "
+            "reproduction will likely be invalid.");
+    }
+  }
+
+  // TODO(russt): write solver options.
+  out_file << R"""(]
+
+settings = clarabel.DefaultSettings()
+solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
+solver.solve()
+)""";
+
+  log()->info("Clarabel reproduction successfully written to {}.", filename);
+
+  out_file.close();
+}
+
 }  // namespace
 
 bool ClarabelSolver::is_available() {
   return true;
 }
 
-void ClarabelSolver::DoSolve(const MathematicalProgram& prog,
-                             const Eigen::VectorXd& initial_guess,
-                             const SolverOptions& merged_options,
-                             MathematicalProgramResult* result) const {
+void ClarabelSolver::DoSolve2(const MathematicalProgram& prog,
+                              const Eigen::VectorXd& initial_guess,
+                              internal::SpecificOptions* options,
+                              MathematicalProgramResult* result) const {
   if (!prog.GetVariableScaling().empty()) {
     static const logging::Warn log_once(
         "ClarabelSolver doesn't support the feature of variable scaling.");
@@ -382,6 +347,17 @@ void ClarabelSolver::DoSolve(const MathematicalProgram& prog,
 
   internal::ParseQuadraticCosts(prog, &P_upper_triplets, &q, &cost_constant);
 
+  std::vector<int> l2norm_costs_second_order_cone_length;
+  std::vector<int> l2norm_costs_lorentz_cone_y_start_indices;
+  std::vector<int> l2norm_costs_t_slack_indices;
+  internal::ParseL2NormCosts(prog, &num_x, &A_triplets, &b, &A_row_count,
+                             &l2norm_costs_second_order_cone_length,
+                             &l2norm_costs_lorentz_cone_y_start_indices, &q,
+                             &l2norm_costs_t_slack_indices);
+  for (const int soc_length : l2norm_costs_second_order_cone_length) {
+    cones.push_back(clarabel::SecondOrderConeT<double>(soc_length));
+  }
+
   // Parse linear equality constraint
   // linear_eq_y_start_indices[i] is the starting index of the dual
   // variable for the constraint prog.linear_equality_constraints()[i]. Namely
@@ -396,8 +372,10 @@ void ClarabelSolver::DoSolve(const MathematicalProgram& prog,
   internal::ParseLinearEqualityConstraints(
       prog, &A_triplets, &b, &A_row_count, &linear_eq_y_start_indices,
       &num_linear_equality_constraints_rows);
-  cones.push_back(
-      clarabel::ZeroConeT<double>(num_linear_equality_constraints_rows));
+  if (num_linear_equality_constraints_rows > 0) {
+    cones.push_back(
+        clarabel::ZeroConeT<double>(num_linear_equality_constraints_rows));
+  }
 
   // Parse bounding box constraints.
   // bbcon_dual_indices[i][j][0] (resp. bbcon_dual_indices[i][j][1]) is the dual
@@ -420,8 +398,22 @@ void ClarabelSolver::DoSolve(const MathematicalProgram& prog,
   internal::ParseLinearConstraints(prog, &A_triplets, &b, &A_row_count,
                                    &linear_constraint_dual_indices,
                                    &num_linear_constraint_rows);
-  cones.push_back(
-      clarabel::NonnegativeConeT<double>(num_linear_constraint_rows));
+  if (num_linear_constraint_rows > 0) {
+    cones.push_back(
+        clarabel::NonnegativeConeT<double>(num_linear_constraint_rows));
+  }
+
+  // Parse scalar PSD constraint as linear constraint.
+  int scalar_psd_positive_cone_length{};
+  std::vector<std::optional<int>> scalar_psd_dual_indices;
+  std::vector<std::optional<int>> scalar_lmi_dual_indices;
+  internal::ParseScalarPositiveSemidefiniteConstraints(
+      prog, &A_triplets, &b, &A_row_count, &scalar_psd_positive_cone_length,
+      &scalar_psd_dual_indices, &scalar_lmi_dual_indices);
+  if (scalar_psd_positive_cone_length > 0) {
+    cones.push_back(
+        clarabel::NonnegativeConeT<double>(scalar_psd_positive_cone_length));
+  }
 
   // Parse Lorentz cone and rotated Lorentz cone constraint
   std::vector<int> second_order_cone_length;
@@ -436,13 +428,34 @@ void ClarabelSolver::DoSolve(const MathematicalProgram& prog,
   for (const int soc_length : second_order_cone_length) {
     cones.push_back(clarabel::SecondOrderConeT<double>(soc_length));
   }
+  // Parse PSD/LMI constraints on 2x2 matrices as second order cone constraints.
+  int num_second_order_cones_from_psd{};
+  std::vector<std::optional<int>> twobytwo_psd_y_start_indices;
+  std::vector<std::optional<int>> twobytwo_lmi_y_start_indices;
+  internal::Parse2x2PositiveSemidefiniteConstraints(
+      prog, &A_triplets, &b, &A_row_count, &num_second_order_cones_from_psd,
+      &twobytwo_psd_y_start_indices, &twobytwo_lmi_y_start_indices);
+  for (int i = 0; i < num_second_order_cones_from_psd; ++i) {
+    cones.push_back(clarabel::SecondOrderConeT<double>(3));
+  }
 
-  std::vector<int> psd_cone_length;
+  std::vector<std::optional<int>> psd_cone_length;
+  std::vector<std::optional<int>> lmi_cone_length;
+  std::vector<std::optional<int>> psd_y_start_indices;
+  std::vector<std::optional<int>> lmi_y_start_indices;
   internal::ParsePositiveSemidefiniteConstraints(
       prog, /* upper triangular = */ true, &A_triplets, &b, &A_row_count,
-      &psd_cone_length);
-  for (const int length : psd_cone_length) {
-    cones.push_back(clarabel::PSDTriangleConeT<double>(length));
+      &psd_cone_length, &lmi_cone_length, &psd_y_start_indices,
+      &lmi_y_start_indices);
+  for (const auto& length : psd_cone_length) {
+    if (length.has_value()) {
+      cones.push_back(clarabel::PSDTriangleConeT<double>(*length));
+    }
+  }
+  for (const auto& length : lmi_cone_length) {
+    if (length.has_value()) {
+      cones.push_back(clarabel::PSDTriangleConeT<double>(*length));
+    }
   }
 
   internal::ParseExponentialConeConstraints(prog, &A_triplets, &b,
@@ -458,16 +471,19 @@ void ClarabelSolver::DoSolve(const MathematicalProgram& prog,
   A.setFromTriplets(A_triplets.begin(), A_triplets.end());
   const Eigen::Map<Eigen::VectorXd> b_vec{b.data(), ssize(b)};
 
-  // When the program mixes PSD cones with either Exponential or Power cones, we
-  // must loosen the default tolerance to help reduce the possiblity of crashing
-  // the entire process. Since we never add power cones (nor generialized power
-  // cones), the only case we need to guard is PSD mixed with Exponential.
-  const bool use_nerfed_default_tolerances =
-      psd_cone_length.size() && prog.exponential_cone_constraints().size();
-
-  const SettingsConverter settings_converter(merged_options,
-                                             use_nerfed_default_tolerances);
-  clarabel::DefaultSettings<double> settings = settings_converter.settings();
+  options->Respell([&](const auto& common, auto* respelled) {
+    respelled->emplace("verbose", common.print_to_console ? 1 : 0);
+    // TODO(jwnimmer-tri) Handle common.print_file_name.
+    if (!common.standalone_reproduction_file_name.empty()) {
+      WriteClarabelReproduction(common.standalone_reproduction_file_name, P,
+                                q_vec, A, b_vec, cones);
+    }
+    // Clarabel does not support setting the number of threads so we ignore the
+    // kMaxThreads option.
+  });
+  clarabel::DefaultSettings<double> settings =
+      clarabel::DefaultSettingsBuilder<double>::default_settings().build();
+  options->CopyToSerializableStruct(&settings);
 
   clarabel::DefaultSolver<double> solver(P, q_vec, A, b_vec, cones, settings);
 
@@ -485,10 +501,13 @@ void ClarabelSolver::DoSolve(const MathematicalProgram& prog,
       Eigen::Map<Eigen::VectorXd>(solution.x.data(), prog.num_vars()));
 
   SetBoundingBoxDualSolution(prog, solution.z, bbcon_dual_indices, result);
-  internal::SetDualSolution(prog, solution.z, linear_constraint_dual_indices,
-                            linear_eq_y_start_indices,
-                            lorentz_cone_y_start_indices,
-                            rotated_lorentz_cone_y_start_indices, result);
+  internal::SetDualSolution(
+      prog, solution.z, linear_constraint_dual_indices,
+      linear_eq_y_start_indices, lorentz_cone_y_start_indices,
+      rotated_lorentz_cone_y_start_indices, psd_y_start_indices,
+      lmi_y_start_indices, scalar_psd_dual_indices, scalar_lmi_dual_indices,
+      twobytwo_psd_y_start_indices, twobytwo_lmi_y_start_indices,
+      /*upper_triangular_psd=*/true, result);
   if (solution.status == clarabel::SolverStatus::Solved ||
       solution.status == clarabel::SolverStatus::AlmostSolved) {
     solution_result = SolutionResult::kSolutionFound;

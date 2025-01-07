@@ -10,9 +10,9 @@ from os.path import join, relpath
 import shutil
 import sys
 
-from bazel_tools.tools.python.runfiles import runfiles
+from python import runfiles
 
-from drake.doc.defs import (
+from doc.defs import (
     check_call,
     main,
     perl_cleanup_html_output,
@@ -67,7 +67,7 @@ def _symlink_headers(*, drake_workspace, temp_dir, modules):
             subdir = relpath(dirpath, drake_workspace)
             os.makedirs(join(temp_dir, "drake", subdir))
             for item in files:
-                if any([module.startswith("drake.doc"),
+                if any([module.startswith("doc"),
                         "images" in subdir,
                         item.endswith(".h")]):
                     dest = join(temp_dir, "drake", subdir, item)

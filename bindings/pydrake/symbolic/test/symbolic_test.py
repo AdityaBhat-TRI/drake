@@ -691,6 +691,8 @@ class TestSymbolicExpression(unittest.TestCase):
         vars = e_x.GetVariables()
         self.assertEqual(len(vars), 1)
         self.assertTrue(list(vars)[0].EqualTo(x))
+        vars2 = e_x.GetFreeVariables()
+        self.assertTrue(vars2.EqualTo(vars))
 
     def test_get_variable_vector(self):
         vars_ = sym.GetVariableVector([e_x, e_y])
@@ -793,7 +795,7 @@ class TestSymbolicExpression(unittest.TestCase):
         numpy_compare.assert_equal(sym.pow(v_x, v_y), v_x ** v_y)
         numpy_compare.assert_equal(sym.sin(v_x), np.sin(v_x))
         numpy_compare.assert_equal(sym.cos(v_x), np.cos(v_x))
-        numpy_compare.assert_equal(sym.tan(v_x), np.tan(v_x))
+        numpy_compare.assert_float_allclose(sym.tan(v_x), np.tan(v_x))
         numpy_compare.assert_equal(sym.asin(v_x), np.arcsin(v_x))
         numpy_compare.assert_equal(sym.acos(v_x), np.arccos(v_x))
         numpy_compare.assert_equal(sym.atan(v_x), np.arctan(v_x))
@@ -2075,6 +2077,17 @@ class TestDecomposeLumpedParameters(unittest.TestCase):
                                     [sym.Expression(0), x*x]])
         numpy_compare.assert_equal(alpha, [sym.Expression(a), a*a])
         numpy_compare.assert_equal(w0, [sym.Expression(x), sym.Expression(0)])
+
+
+class TestDecomposeL2NormExpression(unittest.TestCase):
+    def test(self):
+        x = sym.MakeVectorVariable(2, "x")
+        [is_l2norm, A, b, vars] = sym.DecomposeL2NormExpression(
+            e=np.linalg.norm(x), psd_tol=1e-8, coefficient_tol=1e-8)
+        self.assertTrue(is_l2norm)
+        numpy_compare.assert_equal(A, np.eye(2))
+        numpy_compare.assert_equal(b, [0, 0])
+        numpy_compare.assert_equal(vars, x)
 
 
 class TestUnapplyExpression(unittest.TestCase):

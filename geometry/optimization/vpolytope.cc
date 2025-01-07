@@ -10,10 +10,13 @@
 #include <string>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <libqhullcpp/Qhull.h>
 #include <libqhullcpp/QhullVertexSet.h>
 
 #include "drake/common/is_approx_equal_abstol.h"
+#include "drake/common/overloaded.h"
+#include "drake/geometry/optimization/affine_subspace.h"
 #include "drake/geometry/read_obj.h"
 #include "drake/solvers/solve.h"
 
@@ -80,39 +83,13 @@ MatrixXd OrderCounterClockwise(const MatrixXd& vertices) {
   return sorted_vertices;
 }
 
-MatrixXd GetConvexHullFromObjFile(const std::string& filename,
-                                  const std::string& extension, double scale,
-                                  std::string_view prefix) {
-  if (extension != ".obj") {
-    throw std::runtime_error(fmt::format(
-        "{} can only use mesh shapes (i.e.., Convex, Mesh) with a .obj file "
-        "type; given '{}'.",
-        prefix, filename));
-  }
-  const auto [tinyobj_vertices, faces, num_faces] =
-      internal::ReadObjFile(filename, scale, /* triangulate = */ false);
-  unused(faces);
-  unused(num_faces);
-  orgQhull::Qhull qhull;
-  const int dim = 3;
-  std::vector<double> tinyobj_vertices_flat(tinyobj_vertices->size() * dim);
-  for (int i = 0; i < ssize(*tinyobj_vertices); ++i) {
-    for (int j = 0; j < dim; ++j) {
-      tinyobj_vertices_flat[dim * i + j] = (*tinyobj_vertices)[i](j);
-    }
-  }
-  qhull.runQhull("", dim, tinyobj_vertices->size(),
-                 tinyobj_vertices_flat.data(), "");
-  if (qhull.qhullStatus() != 0) {
-    throw std::runtime_error(
-        fmt::format("Qhull terminated with status {} and  message:\n{}",
-                    qhull.qhullStatus(), qhull.qhullMessage()));
-  }
-  Matrix3Xd vertices(3, qhull.vertexCount());
-  int vertex_count = 0;
-  for (const auto& qhull_vertex : qhull.vertexList()) {
-    vertices.col(vertex_count++) =
-        Eigen::Map<Vector3d>(qhull_vertex.point().toStdVector().data());
+// Extract the vertices from a convex hull. The result is a (3, V) matrix where
+// `hull` has V vertices. The hull should come from an invocation of either
+// Mesh::GetConvexHull() or Convex::GetConvexHull().
+MatrixXd GetConvexHullVertices(const PolygonSurfaceMesh<double>& hull) {
+  Matrix3Xd vertices(3, hull.num_vertices());
+  for (int vi = 0; vi < hull.num_vertices(); ++vi) {
+    vertices.col(vi) = hull.vertex(vi);
   }
   return vertices;
 }
@@ -128,18 +105,41 @@ VPolytope::VPolytope(const QueryObject<double>& query_object,
                      GeometryId geometry_id,
                      std::optional<FrameId> reference_frame)
     : ConvexSet(3, true) {
-  Matrix3Xd vertices;
-  query_object.inspector().GetShape(geometry_id).Reify(this, &vertices);
-
+  const Shape& shape = query_object.inspector().GetShape(geometry_id);
+  const MatrixXd shape_vertices = shape.Visit(overloaded{
+      // We only handle certain shape types.
+      [](const Box& box) {
+        const double x = box.width() / 2.0;
+        const double y = box.depth() / 2.0;
+        const double z = box.height() / 2.0;
+        MatrixXd result(3, 8);
+        // clang-format off
+        result << -x,  x,  x, -x, -x,  x,  x, -x,
+                   y,  y, -y, -y, -y, -y,  y,  y,
+                  -z, -z, -z, -z,  z,  z,  z,  z;
+        // clang-format on
+        return result;
+      },
+      [](const Convex& convex) {
+        return GetConvexHullVertices(convex.GetConvexHull());
+      },
+      [](const Mesh& mesh) {
+        return GetConvexHullVertices(mesh.GetConvexHull());
+      },
+      [&geometry_id](const auto& unsupported) -> MatrixXd {
+        throw std::logic_error(fmt::format(
+            "{} (geometry_id={}) cannot be converted to a VPolytope",
+            unsupported, geometry_id));
+      }});
   const RigidTransformd X_WE =
       reference_frame ? query_object.GetPoseInWorld(*reference_frame)
                       : RigidTransformd::Identity();
   const RigidTransformd& X_WG = query_object.GetPoseInWorld(geometry_id);
   const RigidTransformd X_EG = X_WE.InvertAndCompose(X_WG);
-  vertices_ = X_EG * vertices;
+  vertices_ = X_EG * shape_vertices;
 }
 
-VPolytope::VPolytope(const HPolyhedron& hpoly, const double tol)
+VPolytope::VPolytope(const HPolyhedron& hpoly, double tol)
     : ConvexSet(hpoly.ambient_dimension(), true) {
   // First, assert that the HPolyhedron is bounded (since a VPolytope cannot
   // be used to represent an unbounded set).
@@ -336,10 +336,7 @@ VPolytope::VPolytope(const HPolyhedron& hpoly, const double tol)
   int ii = 0;
   for (const auto& facet : qhull.facetList()) {
     auto incident_hyperplanes = facet.vertices();
-    // A temporary fix that makes sure that vertex_A is a square matrix, as
-    // otherwise partialPivLu can segfault. This randomly occurs when Gurobi
-    // is used as a solver, see bug issue #21055 for details.
-    DRAKE_THROW_UNLESS(incident_hyperplanes.count() ==
+    DRAKE_THROW_UNLESS(incident_hyperplanes.count() >=
                        hpoly.ambient_dimension());
     MatrixXd vertex_A(incident_hyperplanes.count(), hpoly.ambient_dimension());
     for (int jj = 0; jj < incident_hyperplanes.count(); jj++) {
@@ -348,9 +345,11 @@ VPolytope::VPolytope(const HPolyhedron& hpoly, const double tol)
       vertex_A.row(jj) = Eigen::Map<Eigen::RowVectorXd, Eigen::Unaligned>(
           hyperplane.data(), hyperplane.size());
     }
-    vertices_.col(ii) = vertex_A.partialPivLu().solve(
-                            VectorXd::Ones(incident_hyperplanes.count())) +
-                        eigen_center;
+    // The matrix vertex_A is guaranteed to be full column rank and therefore
+    // the ColPivHouseholderQR factorization should be stable.
+    const Eigen::ColPivHouseholderQR<MatrixXd> QR(vertex_A);
+    vertices_.col(ii) =
+        QR.solve(VectorXd::Ones(incident_hyperplanes.count())) + eigen_center;
     ii++;
   }
 }
@@ -381,10 +380,38 @@ VPolytope VPolytope::MakeUnitBox(int dim) {
   return MakeBox(VectorXd::Constant(dim, -1.0), VectorXd::Constant(dim, 1.0));
 }
 
-VPolytope VPolytope::GetMinimalRepresentation() const {
+VPolytope VPolytope::GetMinimalRepresentation(double tol) const {
   if (ambient_dimension() == 0) {
     return VPolytope();
   }
+  if (vertices_.cols() <= 1) {
+    // If there are zero columns, the VPolytope is empty. If there is one
+    // column, the VPolytope is a point. Either way, the current representation
+    // is already minimal.
+    return *this;
+  }
+  if (ambient_dimension() == 1) {
+    // If the ambient dimension is one, we can just take the lowest and highest
+    // points.
+    const double min = vertices_.row(0).minCoeff();
+    const double max = vertices_.row(0).maxCoeff();
+    return VPolytope(Eigen::Matrix<double, 1, 2>(min, max));
+  }
+
+  // Next, compute the affine hull to see if the VPolytope is not full
+  // dimensional.
+  const AffineSubspace affine_hull(*this, tol);
+  if (affine_hull.AffineDimension() < affine_hull.ambient_dimension()) {
+    // Project the points onto the local coordinate system of the affine hull,
+    // compute the minimal representation there, and then lift back to the
+    // ambient space.
+    MatrixXd points_local = affine_hull.ToLocalCoordinates(vertices_);
+    VPolytope vpoly_local(points_local);
+    MatrixXd minimal_points_local =
+        vpoly_local.GetMinimalRepresentation().vertices();
+    return VPolytope(affine_hull.ToGlobalCoordinates(minimal_points_local));
+  }
+
   orgQhull::Qhull qhull;
   qhull.runQhull("", vertices_.rows(), vertices_.cols(), vertices_.data(), "");
   if (qhull.qhullStatus() != 0) {
@@ -469,12 +496,12 @@ std::unique_ptr<ConvexSet> VPolytope::DoClone() const {
   return std::make_unique<VPolytope>(*this);
 }
 
-std::optional<bool> VPolytope::DoIsBoundedShortcut() const {
-  return true;
-}
-
 bool VPolytope::DoIsEmpty() const {
   return vertices_.cols() == 0;
+}
+
+std::optional<bool> VPolytope::DoIsBoundedShortcut() const {
+  return true;
 }
 
 std::optional<VectorXd> VPolytope::DoMaybeGetPoint() const {
@@ -497,6 +524,25 @@ bool VPolytope::DoPointInSet(const Eigen::Ref<const VectorXd>& x,
   if (vertices_.cols() == 0) {
     return false;
   }
+
+  // Attempt to "fail fast": Checks if a hyperplane through x, with a normal
+  // vector colinear to (x - mean(vertices)), separates the point from the
+  // VPolytope avoid solving the point containment LP. This is a heuristic,
+  // sufficient condition which can falsify that the point is in the set which
+  // works better as the point in question gets farther away.
+
+  Eigen::VectorXd vertex_mean = vertices_.rowwise().mean();
+  Eigen::VectorXd a = (x - vertex_mean).normalized();
+  double b = a.dot(x);
+  Eigen::VectorXd vals = a.transpose() * vertices_;
+  vals = vals.array() - b;
+
+  // Only allow early return if query point x is sufficiently far away from the
+  // vertex mean.
+  if ((vals.array() < -tol).all() && (x - vertex_mean).norm() > 1e-13) {
+    return false;
+  }
+
   const int n = ambient_dimension();
   const int m = vertices_.cols();
   const double inf = std::numeric_limits<double>::infinity();
@@ -614,6 +660,20 @@ VPolytope::DoToShapeWithPose() const {
       "class (to support in-memory mesh data, or file I/O).");
 }
 
+std::unique_ptr<ConvexSet> VPolytope::DoAffineHullShortcut(
+    std::optional<double> tol) const {
+  DRAKE_THROW_UNLESS(vertices_.size() > 0);
+  Eigen::JacobiSVD<MatrixXd> svd;
+  MatrixXd centered_points =
+      vertices_.rightCols(vertices_.cols() - 1).colwise() - vertices_.col(0);
+  svd.compute(centered_points, Eigen::DecompositionOptions::ComputeThinU);
+  if (tol) {
+    svd.setThreshold(tol.value());
+  }
+  return std::make_unique<AffineSubspace>(svd.matrixU().leftCols(svd.rank()),
+                                          vertices_.col(0));
+}
+
 double VPolytope::DoCalcVolume() const {
   orgQhull::Qhull qhull;
   try {
@@ -633,37 +693,8 @@ double VPolytope::DoCalcVolume() const {
   return qhull.volume();
 }
 
-void VPolytope::ImplementGeometry(const Box& box, void* data) {
-  const double x = box.width() / 2.0;
-  const double y = box.depth() / 2.0;
-  const double z = box.height() / 2.0;
-  DRAKE_ASSERT(data != nullptr);
-  Matrix3Xd* vertices = static_cast<Matrix3Xd*>(data);
-  vertices->resize(3, 8);
-  // clang-format off
-  *vertices << -x,  x,  x, -x, -x,  x,  x, -x,
-                y,  y, -y, -y, -y, -y,  y,  y,
-               -z, -z, -z, -z,  z,  z,  z,  z;
-  // clang-format on
-}
-
-void VPolytope::ImplementGeometry(const Convex& convex, void* data) {
-  DRAKE_ASSERT(data != nullptr);
-  Matrix3Xd* vertex_data = static_cast<Matrix3Xd*>(data);
-  *vertex_data = GetConvexHullFromObjFile(convex.filename(), convex.extension(),
-                                          convex.scale(), "VPolytope");
-}
-
-void VPolytope::ImplementGeometry(const Mesh& mesh, void* data) {
-  DRAKE_ASSERT(data != nullptr);
-  Matrix3Xd* vertex_data = static_cast<Matrix3Xd*>(data);
-  *vertex_data = GetConvexHullFromObjFile(mesh.filename(), mesh.extension(),
-                                          mesh.scale(), "VPolytope");
-}
-
 MatrixXd GetVertices(const Convex& convex) {
-  return GetConvexHullFromObjFile(convex.filename(), convex.extension(),
-                                  convex.scale(), "GetVertices()");
+  return GetConvexHullVertices(convex.GetConvexHull());
 }
 
 }  // namespace optimization

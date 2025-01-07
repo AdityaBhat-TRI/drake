@@ -1,0 +1,12 @@
+#!/bin/bash
+#
+# Drake script to remove the Python venv.
+
+set -eux -o pipefail
+
+# Chdir to the Drake root.
+cd "$(dirname $0)/../../.."
+readonly drake_python="$(bazel info output_base).drake_python"
+
+# Remove the venv.
+rm -r "${drake_python}"

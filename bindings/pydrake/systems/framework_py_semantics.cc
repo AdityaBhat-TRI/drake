@@ -3,10 +3,12 @@
 #include "drake/bindings/pydrake/common/cpp_template_pybind.h"
 #include "drake/bindings/pydrake/common/default_scalars_pybind.h"
 #include "drake/bindings/pydrake/common/eigen_pybind.h"
+#include "drake/bindings/pydrake/common/ref_cycle_pybind.h"
 #include "drake/bindings/pydrake/common/type_safe_index_pybind.h"
 #include "drake/bindings/pydrake/common/wrap_pybind.h"
 #include "drake/bindings/pydrake/documentation_pybind.h"
 #include "drake/bindings/pydrake/pydrake_pybind.h"
+#include "drake/bindings/pydrake/systems/builder_life_support_pybind.h"
 #include "drake/systems/framework/context.h"
 #include "drake/systems/framework/diagram_builder.h"
 #include "drake/systems/framework/event.h"
@@ -24,6 +26,10 @@ namespace pydrake {
 namespace {
 
 using AbstractValuePtrList = vector<unique_ptr<AbstractValue>>;
+
+// NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
+using namespace drake::systems;
+constexpr auto& doc = pydrake_doc.drake.systems;
 
 // Given an InputPort or OutputPort as self, return self.Eval(context).  In
 // python, always returns either a numpy.ndarray (when vector-valued) or the
@@ -53,10 +59,6 @@ py::object DoEval(const SomeObject* self, const systems::Context<T>& context) {
 }
 
 void DoScalarIndependentDefinitions(py::module m) {
-  // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
-  using namespace drake::systems;
-  constexpr auto& doc = pydrake_doc.drake.systems;
-
   {
     using Class = UseDefaultName;
     py::class_<Class>(m, "UseDefaultName", doc.UseDefaultName.doc)
@@ -282,11 +284,7 @@ void DoScalarIndependentDefinitions(py::module m) {
 }
 
 template <typename T>
-void DoScalarDependentDefinitions(py::module m) {
-  // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
-  using namespace drake::systems;
-  constexpr auto& doc = pydrake_doc.drake.systems;
-
+py::class_<Context<T>, ContextBase> DefineContext(py::module m) {
   auto context_cls = DefineTemplateClassWithDefault<Context<T>, ContextBase>(
       m, "Context", GetPyParam<T>(), doc.Context.doc);
   context_cls
@@ -448,11 +446,16 @@ void DoScalarDependentDefinitions(py::module m) {
       .def("__deepcopy__", [](const Context<T>* self,
                                py::dict /* memo */) { return self->Clone(); })
       .def("__str__", &Context<T>::to_string, doc.Context.to_string.doc);
+  return context_cls;
+}
 
-  auto bind_context_methods_templated_on_a_secondary_scalar =
-      [m, &doc, &context_cls](auto dummy_u) {
+template <typename T, typename PyClass>
+void DefineContextMethodsTemplatedOnASecondaryScalar(PyClass* context_cls) {
+  PyClass& cls = *context_cls;
+  type_visit(
+      [&cls](auto dummy_u) {
         using U = decltype(dummy_u);
-        context_cls  // BR
+        cls  // BR
             .def(
                 "SetStateAndParametersFrom",
                 [](Context<T>* self, const Context<U>& source) {
@@ -466,13 +469,18 @@ void DoScalarDependentDefinitions(py::module m) {
                 },
                 py::arg("source"),
                 doc.Context.SetTimeStateAndParametersFrom.doc);
-      };
-  type_visit(
-      bind_context_methods_templated_on_a_secondary_scalar, CommonScalarPack{});
+      },
+      CommonScalarPack{});
+}
 
+template <typename T>
+void DefineLeafContext(py::module m) {
   DefineTemplateClassWithDefault<LeafContext<T>, Context<T>>(
       m, "LeafContext", GetPyParam<T>(), doc.LeafContext.doc);
+}
 
+template <typename T>
+void DefineEventAndEventSubclasses(py::module m) {
   // Event mechanisms.
   DefineTemplateClassWithDefault<Event<T>>(
       m, "Event", GetPyParam<T>(), doc.Event.doc)
@@ -580,38 +588,44 @@ void DoScalarDependentDefinitions(py::module m) {
             "Constructs an UnrestrictedUpdateEvent with the given callback "
             "function.");
   }
+}
 
-  // Glue mechanisms.
-  DefineTemplateClassWithDefault<DiagramBuilder<T>>(
-      m, "DiagramBuilder", GetPyParam<T>(), doc.DiagramBuilder.doc)
+template <typename T>
+void DoDefineFrameworkDiagramBuilder(py::module m) {
+  using internal::BuilderLifeSupport;
+  DefineTemplateClassWithDefault<DiagramBuilder<T>>(m, "DiagramBuilder",
+      GetPyParam<T>(), doc.DiagramBuilder.doc, std::nullopt, py::dynamic_attr())
       .def(py::init<>(), doc.DiagramBuilder.ctor.doc)
       .def(
           "AddSystem",
-          [](DiagramBuilder<T>* self, unique_ptr<System<T>> system) {
-            return self->AddSystem(std::move(system));
+          [](DiagramBuilder<T>* self, System<T>& system) {
+            // Using BuilderLifeSupport::stash makes the builder
+            // temporarily immortal (uncollectible self cycle). This will be
+            // resolved by the Build() step. See BuilderLifeSupport for
+            // rationale.
+            BuilderLifeSupport<T>::stash(self);
+            // The C++ method doesn't offer a bare-pointer overload, only
+            // shared_ptr. Because object lifetime is already handled by the
+            // ref_cycle annotation below, we can pass the `system` as an
+            // unowned shared_ptr.
+            return self->AddSystem(make_unowned_shared_ptr_from_raw(&system));
           },
-          py::arg("system"),
-          // TODO(eric.cousineau): These two keep_alive's purposely form a
-          // reference cycle as a workaround for #14355. We should find a
-          // better way?
-          // Keep alive, reference: `self` keeps `return` alive.
-          py::keep_alive<1, 0>(),
-          // Keep alive, ownership: `system` keeps `self` alive.
-          py::keep_alive<2, 1>(), doc.DiagramBuilder.AddSystem.doc)
+          py::arg("system"), internal::ref_cycle<1, 2>(),
+          doc.DiagramBuilder.AddSystem.doc)
       .def(
           "AddNamedSystem",
-          [](DiagramBuilder<T>* self, std::string& name,
-              unique_ptr<System<T>> system) {
-            return self->AddNamedSystem(name, std::move(system));
+          [](DiagramBuilder<T>* self, std::string& name, System<T>& system) {
+            // Using BuilderLifeSupport::stash makes the builder
+            // temporarily immortal (uncollectible self cycle). This will be
+            // resolved by the Build() step. See BuilderLifeSupport for
+            // rationale.
+            BuilderLifeSupport<T>::stash(self);
+            // Ditto with "AddSystem" above for how we handle the `&system`.
+            return self->AddNamedSystem(
+                name, make_unowned_shared_ptr_from_raw(&system));
           },
-          py::arg("name"), py::arg("system"),
-          // TODO(eric.cousineau): These two keep_alive's purposely form a
-          // reference cycle as a workaround for #14355. We should find a
-          // better way?
-          // Keep alive, reference: `self` keeps `return` alive.
-          py::keep_alive<1, 0>(),
-          // Keep alive, ownership: `system` keeps `self` alive.
-          py::keep_alive<3, 1>(), doc.DiagramBuilder.AddNamedSystem.doc)
+          py::arg("name"), py::arg("system"), internal::ref_cycle<1, 3>(),
+          doc.DiagramBuilder.AddNamedSystem.doc)
       .def("RemoveSystem", &DiagramBuilder<T>::RemoveSystem, py::arg("system"),
           doc.DiagramBuilder.RemoveSystem.doc)
       .def("empty", &DiagramBuilder<T>::empty, doc.DiagramBuilder.empty.doc)
@@ -686,19 +700,45 @@ void DoScalarDependentDefinitions(py::module m) {
       .def("ExportOutput", &DiagramBuilder<T>::ExportOutput, py::arg("output"),
           py::arg("name") = kUseDefaultName, py_rvp::reference_internal,
           doc.DiagramBuilder.ExportOutput.doc)
-      .def("Build", &DiagramBuilder<T>::Build,
-          // Keep alive, ownership (tr.): `self` keeps `return` alive.
-          py::keep_alive<1, 0>(), doc.DiagramBuilder.Build.doc)
-      .def("BuildInto", &DiagramBuilder<T>::BuildInto, py::arg("target"),
-          // Keep alive, ownership (tr.): `target` keeps `self` alive.
-          py::keep_alive<2, 1>(), doc.DiagramBuilder.BuildInto.doc)
+      .def(
+          "Build",
+          [](DiagramBuilder<T>* self) {
+            // The c++ Build() step would pass life support to the
+            // diagram. Instead of relying on its one-way, uncollectible
+            // support here, abandon it in favor of the builder-diagram
+            // ref_cycle invoked below. We can't have both; that would create
+            // an uncollectible builder-diagram cycle and make those objects
+            // immortal.
+            BuilderLifeSupport<T>::abandon(self);
+            return self->Build();
+          },
+          internal::ref_cycle<0, 1>(), doc.DiagramBuilder.Build.doc)
+      .def(
+          "BuildInto",
+          [](DiagramBuilder<T>* self, Diagram<T>* target) {
+            // The c++ BuildInto() step would pass life support to the
+            // diagram. Instead of relying on its one-way, uncollectible
+            // support here, abandon it in favor of the builder-diagram
+            // ref_cycle invoked below. We can't have both; that would create
+            // an uncollectible builder-diagram cycle and make those objects
+            // immortal.
+            BuilderLifeSupport<T>::abandon(self);
+            self->BuildInto(target);
+          },
+          internal::ref_cycle<1, 2>(), py::arg("target"),
+          doc.DiagramBuilder.BuildInto.doc)
       .def("IsConnectedOrExported", &DiagramBuilder<T>::IsConnectedOrExported,
           py::arg("port"), doc.DiagramBuilder.IsConnectedOrExported.doc)
       .def("num_input_ports", &DiagramBuilder<T>::num_input_ports,
           doc.DiagramBuilder.num_input_ports.doc)
       .def("num_output_ports", &DiagramBuilder<T>::num_output_ports,
           doc.DiagramBuilder.num_output_ports.doc);
+}
 
+// TODO(jwnimmer-tri) This function is just a grab-bag of several classes. We
+// should split it up into smaller pieces.
+template <typename T>
+void DefineRemainingScalarDependentDefinitions(py::module m) {
   DefineTemplateClassWithDefault<OutputPort<T>>(
       m, "OutputPort", GetPyParam<T>(), doc.OutputPort.doc)
       .def("size", &OutputPort<T>::size, doc.PortBase.size.doc)
@@ -833,8 +873,10 @@ void DoScalarDependentDefinitions(py::module m) {
   // minimal binding required to support DeclareWitnessFunction.
   DefineTemplateClassWithDefault<WitnessFunction<T>>(
       m, "WitnessFunction", GetPyParam<T>(), doc.WitnessFunction.doc);
+}  // NOLINT(readability/fn_size)
 
-  // Parameters.
+template <typename T>
+void DefineParameters(py::module m) {
   auto parameters = DefineTemplateClassWithDefault<Parameters<T>>(
       m, "Parameters", GetPyParam<T>(), doc.Parameters.doc);
   DefClone(&parameters);
@@ -907,8 +949,10 @@ void DoScalarDependentDefinitions(py::module m) {
             self->SetFrom(other);
           },
           doc.Parameters.SetFrom.doc);
+}
 
-  // State.
+template <typename T>
+void DefineState(py::module m) {
   DefineTemplateClassWithDefault<State<T>>(
       m, "State", GetPyParam<T>(), doc.State.doc)
       .def(py::init<>(), doc.State.ctor.doc)
@@ -955,8 +999,10 @@ void DoScalarDependentDefinitions(py::module m) {
           },
           py::arg("index"), py_rvp::reference_internal,
           doc.State.get_mutable_abstract_state.doc_1args);
+}
 
-  // - Constituents.
+template <typename T>
+void DefineContinuousState(py::module m) {
   auto continuous_state = DefineTemplateClassWithDefault<ContinuousState<T>>(
       m, "ContinuousState", GetPyParam<T>(), doc.ContinuousState.doc);
   DefClone(&continuous_state);
@@ -1021,7 +1067,10 @@ void DoScalarDependentDefinitions(py::module m) {
           py::arg("value"), doc.ContinuousState.SetFromVector.doc)
       .def("CopyToVector", &ContinuousState<T>::CopyToVector,
           doc.ContinuousState.CopyToVector.doc);
+}
 
+template <typename T>
+void DefineDiscreteValues(py::module m) {
   auto discrete_values = DefineTemplateClassWithDefault<DiscreteValues<T>>(
       m, "DiscreteValues", GetPyParam<T>(), doc.DiscreteValues.doc);
   DefClone(&discrete_values);
@@ -1043,7 +1092,7 @@ void DoScalarDependentDefinitions(py::module m) {
       .def("value",
           overload_cast_explicit<const VectorX<T>&, int>(
               &DiscreteValues<T>::value),
-          py_rvp::reference_internal, py::arg("index") = 0,
+          return_value_policy_for_scalar_type<T>(), py::arg("index") = 0,
           doc.DiscreteValues.value.doc_1args)
       .def("get_vector",
           overload_cast_explicit<const BasicVector<T>&, int>(
@@ -1067,13 +1116,14 @@ void DoScalarDependentDefinitions(py::module m) {
               int index) -> Eigen::Ref<const VectorX<T>> {
             return self->get_value(index);
           },
-          py_rvp::reference_internal, py::arg("index") = 0,
+          return_value_policy_for_scalar_type<T>(), py::arg("index") = 0,
           doc.DiscreteValues.get_value.doc_1args)
       .def(
           "get_mutable_value",
           [](DiscreteValues<T>* self, int index) -> Eigen::Ref<VectorX<T>> {
             return self->get_mutable_value(index);
           },
+          // N.B. We explicitly want a failure when T != double due to #8116.
           py_rvp::reference_internal, py::arg("index") = 0,
           doc.DiscreteValues.get_mutable_value.doc_1args)
       .def(
@@ -1092,18 +1142,51 @@ void DoScalarDependentDefinitions(py::module m) {
             self[index] = value;
           },
           doc.DiscreteValues.operator_array.doc_1args_idx_nonconst);
-}  // NOLINT(readability/fn_size)
+}
 }  // namespace
 
-void DefineFrameworkPySemantics(py::module m) {
-  DoScalarIndependentDefinitions(m);
+void DefineFrameworkDiagramBuilder(py::module m) {
+  type_visit(
+      [m](auto dummy) {
+        using T = decltype(dummy);
+        DoDefineFrameworkDiagramBuilder<T>(m);
+      },
+      CommonScalarPack{});
+}
 
-  // Do templated instantiations.
-  auto bind_common_scalar_types = [m](auto dummy) {
-    using T = decltype(dummy);
-    DoScalarDependentDefinitions<T>(m);
-  };
-  type_visit(bind_common_scalar_types, CommonScalarPack{});
+void DefineFrameworkPySemantics(py::module m) {
+  // This list of calls to helpers must remain in topological dependency order.
+  DoScalarIndependentDefinitions(m);
+  type_visit(
+      [m](auto dummy) {
+        using T = decltype(dummy);
+        DefineContinuousState<T>(m);
+        DefineDiscreteValues<T>(m);
+        DefineState<T>(m);
+        DefineParameters<T>(m);
+      },
+      CommonScalarPack{});
+  {
+    // The Context classes form a dependency cycle due to built-in scalar
+    // conversion, so we must declare all of them prior to defining any of them.
+    auto cls_context_double = DefineContext<double>(m);
+    auto cls_context_autodiff = DefineContext<AutoDiffXd>(m);
+    auto cls_context_expression = DefineContext<symbolic::Expression>(m);
+    DefineContextMethodsTemplatedOnASecondaryScalar<double>(
+        &cls_context_double);
+    DefineContextMethodsTemplatedOnASecondaryScalar<AutoDiffXd>(
+        &cls_context_autodiff);
+    DefineContextMethodsTemplatedOnASecondaryScalar<symbolic::Expression>(
+        &cls_context_expression);
+  }
+  type_visit(
+      [m](auto dummy) {
+        using T = decltype(dummy);
+        DefineLeafContext<T>(m);
+        DefineEventAndEventSubclasses<T>(m);
+        DefineRemainingScalarDependentDefinitions<T>(m);
+      },
+      CommonScalarPack{});
 }
 
 }  // namespace pydrake

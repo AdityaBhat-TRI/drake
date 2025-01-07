@@ -1,11 +1,11 @@
-load("//tools/skylark:cc.bzl", "cc_library")
-load("//tools/workspace:generate_file.bzl", "generate_file")
+load("@vtk_internal//:modules.bzl", "MODULES", "PLATFORM")
+load("@vtk_internal//:settings.bzl", "MODULE_SETTINGS")
+load("//tools/skylark:cc.bzl", "cc_library", "objc_library")
 load(
     "//tools/workspace:cmake_configure_file.bzl",
     "cmake_configure_files",
 )
-load("@vtk_internal//:modules.bzl", "MODULES", "PLATFORM")
-load("@vtk_internal//:settings.bzl", "MODULE_SETTINGS")
+load("//tools/workspace:generate_file.bzl", "generate_file")
 
 # You can manually set this to True, to get some feedback during upgrades.
 _VERBOSE = False
@@ -38,6 +38,7 @@ def _vtk_cc_module_impl(
         cmake_defines = [],
         cmake_undefines = [],
         defines_extra = [],
+        includes_extra = [],
         strip_include_prefix_extra = "",
         copts_extra = [],
         linkopts_extra = [],
@@ -89,7 +90,7 @@ def _vtk_cc_module_impl(
         subdir + "/**/*.txx.in",
     ], exclude = [
         "**/test*",
-    ] + hdrs_glob_exclude)
+    ] + hdrs_glob_exclude, allow_empty = True)
     gen_hdrs = [
         # We want to start from, e.g., "Common/Core/vtkDebug.h.in" and generate
         # "gen/Common/Core/vtkDebug.h" with CMake substitutions applied, which
@@ -126,6 +127,9 @@ def _vtk_cc_module_impl(
     srcs = srcs_extra + native.glob(
         [subdir + "/*.cxx"] + srcs_glob_extra,
         exclude = included_cxxs + srcs_glob_exclude + [
+            # Unwanted serialization code which leaks non-namespaced symbols.
+            "**/*SerDesHelper.cxx",
+            # Never build test code into our runtime libraries.
             "**/vtkTest*",
             "**/test*",
         ],
@@ -142,12 +146,12 @@ def _vtk_cc_module_impl(
     # Deal with objc code.
     if PLATFORM["name"] != "linux" and srcs_objc_non_arc:
         objc_lib_name = "_" + module_name + "_objc"
-        native.objc_library(
+        objc_library(
             name = objc_lib_name,
             non_arc_srcs = srcs_objc_non_arc,
             hdrs = hdrs,
-            includes = [subdir],
             defines = defines_extra,
+            includes = [subdir] + includes_extra,
             copts = copts,
             linkopts = linkopts,
             deps = deps + [
@@ -171,8 +175,9 @@ def _vtk_cc_module_impl(
         name = module_name,
         srcs = srcs,
         hdrs = hdrs,
-        strip_include_prefix = subdir + strip_include_prefix_extra,
         defines = defines_extra,
+        includes = includes_extra,
+        strip_include_prefix = subdir + strip_include_prefix_extra,
         copts = copts,
         linkopts = linkopts,
         features = features,
@@ -237,6 +242,7 @@ def vtk_cc_module(
         cmake_undefines: When generating a header file, sets these definitions
             to be undefined. See cmake_configure_file() for details.
         defines_extra: Adds `defines = []` to the cc_library.
+        includes_extra: Adds `includes = []` to the cc_library.
         strip_include_prefix_extra: Appends the given string after the default
             strip_include_prefix (i.e., the subdir name).
         copts_extra: Adds `copts = []` to the cc_library.
@@ -284,6 +290,11 @@ def modules_closure(module_names, *, max_depth = 10):
                         continue
                     if dep_name in ignore:
                         continue
+                    if _VERBOSE:
+                        print("Modules closure: {} uses {}".format(
+                            name,
+                            dep_name,
+                        ))
                     next_worklist.append(dep_name)
         worklist = next_worklist
     if worklist:
@@ -544,30 +555,6 @@ def generate_common_core_sources():
     generate_common_core_vtk_type_arrays()
     generate_common_core_array_instantiations()
 
-def cxx_embed(*, src, out, constant_name):
-    """Mimics the vtkEncodeString.cmake logic.
-    Generates an `*.h` file with the contents of a data file.
-    """
-    header = """
-#pragma once
-VTK_ABI_NAMESPACE_BEGIN
-constexpr char {constant_name}[] = R"drakevtkinternal(
-""".format(constant_name = constant_name)
-    footer = """
-)drakevtkinternal";
-VTK_ABI_NAMESPACE_END
-"""
-    native.genrule(
-        name = "_genrule_" + out,
-        srcs = [src],
-        outs = [out],
-        cmd = " && ".join([
-            "(echo '" + header + "' > $@)",
-            "(cat $< >> $@)",
-            "(echo '" + footer + "' >> $@)",
-        ]),
-    )
-
 def _path_stem(src):
     """Returns e.g. "quux" when given "foo/bar/quux.ext".
     """
@@ -582,6 +569,12 @@ def generate_rendering_opengl2_sources():
     ]):
         stem = _path_stem(src)
         hdr = "Rendering/OpenGL2/" + stem + ".h"
-        cxx_embed(src = src, out = hdr, constant_name = stem)
+        native.genrule(
+            name = "_genrule_" + hdr,
+            srcs = [src],
+            outs = [hdr],
+            cmd = "$(execpath :data_to_header) $< > $@",
+            tools = [":data_to_header"],
+        )
         hdrs.append(hdr)
     native.filegroup(name = name, srcs = hdrs)

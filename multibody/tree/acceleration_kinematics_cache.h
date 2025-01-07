@@ -28,7 +28,7 @@ namespace internal {
 template <typename T>
 class AccelerationKinematicsCache {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(AccelerationKinematicsCache)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(AccelerationKinematicsCache);
 
   // Constructs an acceleration kinematics cache entry for the given
   // MultibodyTreeTopology.
@@ -80,14 +80,10 @@ class AccelerationKinematicsCache {
 
   // Returns a constant reference to the generalized accelerations `vdot` for
   // the entire model.
-  const VectorX<T>& get_vdot() const {
-    return vdot_;
-  }
+  const VectorX<T>& get_vdot() const { return vdot_; }
 
   // Mutable version of get_vdot().
-  VectorX<T>& get_mutable_vdot() {
-    return vdot_;
-  }
+  VectorX<T>& get_mutable_vdot() { return vdot_; }
 
  private:
   // Pools store entries in the same order as the mobilized bodies (BodyNodes)
@@ -96,9 +92,7 @@ class AccelerationKinematicsCache {
   // `get_A_WB()` for instance.
 
   // Return the number of mobilized bodies in this multibody tree cache.
-  int get_num_mobods() const {
-    return static_cast<int>(A_WB_pool_.size());
-  }
+  int get_num_mobods() const { return static_cast<int>(A_WB_pool_.size()); }
 
   // Allocates resources for this acceleration kinematics cache.
   void Allocate(const MultibodyTreeTopology& topology) {
@@ -127,4 +121,4 @@ class AccelerationKinematicsCache {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::internal::AccelerationKinematicsCache)
+    class ::drake::multibody::internal::AccelerationKinematicsCache);

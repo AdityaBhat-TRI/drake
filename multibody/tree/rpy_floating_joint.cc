@@ -9,6 +9,9 @@ namespace drake {
 namespace multibody {
 
 template <typename T>
+RpyFloatingJoint<T>::~RpyFloatingJoint() = default;
+
+template <typename T>
 const std::string& RpyFloatingJoint<T>::type_name() const {
   static const never_destroyed<std::string> name{kTypeName};
   return name.access();
@@ -62,12 +65,17 @@ RpyFloatingJoint<T>::DoCloneToScalar(
 // in the header file.
 template <typename T>
 std::unique_ptr<typename Joint<T>::BluePrint>
-RpyFloatingJoint<T>::MakeImplementationBlueprint() const {
+RpyFloatingJoint<T>::MakeImplementationBlueprint(
+    const internal::SpanningForest::Mobod& mobod) const {
   auto blue_print = std::make_unique<typename Joint<T>::BluePrint>();
-  auto mobilizer = std::make_unique<internal::RpyFloatingMobilizer<T>>(
-      this->frame_on_parent(), this->frame_on_child());
-  mobilizer->set_default_position(this->default_positions());
-  blue_print->mobilizer = std::move(mobilizer);
+  const auto [inboard_frame, outboard_frame] =
+      this->tree_frames(mobod.is_reversed());
+  // TODO(sherm1) The mobilizer needs to be reversed, not just the frames.
+  auto rpy_floating_mobilizer =
+      std::make_unique<internal::RpyFloatingMobilizer<T>>(mobod, *inboard_frame,
+                                                          *outboard_frame);
+  rpy_floating_mobilizer->set_default_position(this->default_positions());
+  blue_print->mobilizer = std::move(rpy_floating_mobilizer);
   return blue_print;
 }
 
@@ -75,4 +83,4 @@ RpyFloatingJoint<T>::MakeImplementationBlueprint() const {
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::RpyFloatingJoint)
+    class ::drake::multibody::RpyFloatingJoint);

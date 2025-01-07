@@ -127,7 +127,7 @@ class KukaIiwaModelForwardDynamicsTests : public test::KukaIiwaModelTests {
 // the computation for an arbitrary set of robot states.
 TEST_F(KukaIiwaModelForwardDynamicsTests, ForwardDynamicsTest) {
   // Joint angles and velocities.
-  VectorX<double> q(kNumJoints - 1), qdot(kNumJoints - 1);
+  VectorX<double> q(kNumRevoluteJoints), qdot(kNumRevoluteJoints);
   double q30 = M_PI / 6, q45 = M_PI / 4, q60 = M_PI / 3;
 
   // Test 1: Static configuration.
@@ -171,8 +171,7 @@ GTEST_TEST(MultibodyPlantForwardDynamics, AtlasRobot) {
 
   // Create a context and store an arbitrary configuration.
   std::unique_ptr<Context<double>> context = plant.CreateDefaultContext();
-  for (JointIndex joint_index(0); joint_index < plant.num_joints();
-       ++joint_index) {
+  for (JointIndex joint_index : plant.GetJointIndices()) {
     const Joint<double>& joint = plant.get_joint(joint_index);
     // This model only has weld, revolute, and floating joints. Set the revolute
     // joints to an arbitrary angle.
@@ -242,11 +241,10 @@ GTEST_TEST(WeldedBoxesTest, ForwardDynamicsViaArticulatedBodyAlgorithm) {
 
 std::unique_ptr<systems::LinearSystem<double>> MakeLinearizedCartPole(
     double time_step) {
-  const std::string sdf_file =
-      FindResourceOrThrow("drake/examples/multibody/cart_pole/cart_pole.sdf");
-
   MultibodyPlant<double> plant(time_step);
-  Parser(&plant).AddModels(sdf_file);
+  plant.SetUseSampledOutputPorts(false);  // Not compatible with linearization.
+  Parser(&plant).AddModelsFromUrl(
+      "package://drake/examples/multibody/cart_pole/cart_pole.sdf");
   plant.Finalize();
 
   auto context = plant.CreateDefaultContext();
@@ -586,6 +584,64 @@ TEST_F(ConnectedRigidBodiesTest, ThrowErrorForZeroMassInertiaFreeBody) {
   // inertia matrix is positive definite (and far from singular).
   bodyA_->SetMass(context_.get(), 1E-4);
   DRAKE_EXPECT_NO_THROW(plant_.EvalForwardDynamics(*context_))
+}
+
+// Checks that when output port sampling is turned on but we have not yet taken
+// a step, the sampled output ports output the desired results. For simplicity,
+// here we only use a single body (with no geometry) -- the test would be
+// slightly better with a SceneGraph but this is good enough for now.
+GTEST_TEST(MultibodyPlantForwardDynamics, SampledOutputsBeforeStep) {
+  MultibodyPlant<double> plant(0.01);
+  AddCubicalLink(&plant, "body_name", 1, 0.01);
+  plant.Finalize();
+  auto plant_context = plant.CreateDefaultContext();
+
+  const auto& body_spatial_accelerations =
+      plant.get_body_spatial_accelerations_output_port()
+          .Eval<std::vector<SpatialAcceleration<double>>>(*plant_context);
+  EXPECT_EQ(body_spatial_accelerations.size(), 2);
+  for (const auto& body_spatial_acceleration : body_spatial_accelerations) {
+    EXPECT_EQ(body_spatial_acceleration.get_coeffs(), Vector6d::Zero());
+  }
+
+  const auto& net_actuation =
+      plant.get_net_actuation_output_port().Eval(*plant_context);
+  EXPECT_TRUE(net_actuation.isZero(0.0));
+
+  const auto& generalized_acceleration =
+      plant.get_generalized_acceleration_output_port().Eval(*plant_context);
+  EXPECT_TRUE(generalized_acceleration.isZero(0.0));
+
+  const auto& reaction_forces =
+      plant.get_reaction_forces_output_port()
+          .Eval<std::vector<SpatialForce<double>>>(*plant_context);
+  for (const auto& reaction_force : reaction_forces) {
+    EXPECT_EQ(reaction_force.get_coeffs(), Vector6d::Zero());
+  }
+
+  const auto& contact_results =
+      plant.get_contact_results_output_port().Eval<ContactResults<double>>(
+          *plant_context);
+  EXPECT_EQ(contact_results.num_point_pair_contacts(), 0);
+  EXPECT_EQ(contact_results.num_hydroelastic_contacts(), 0);
+  EXPECT_EQ(contact_results.num_deformable_contacts(), 0);
+
+  for (ModelInstanceIndex i{0}; i < plant.num_model_instances(); ++i) {
+    SCOPED_TRACE(fmt::format("With model_instance_index={}", i));
+
+    const auto& ith_net_actuation =
+        plant.get_net_actuation_output_port(i).Eval(*plant_context);
+    EXPECT_TRUE(ith_net_actuation.isZero(0.0));
+
+    const auto& ith_generalized_acceleration =
+        plant.get_generalized_acceleration_output_port(i).Eval(*plant_context);
+    EXPECT_TRUE(ith_generalized_acceleration.isZero(0.0));
+
+    const auto& ith_generalized_contact_forces =
+        plant.get_generalized_contact_forces_output_port(i).Eval(
+            *plant_context);
+    EXPECT_TRUE(ith_generalized_contact_forces.isZero(0.0));
+  }
 }
 
 // The purpose of this test is to verify that the status of locked joints

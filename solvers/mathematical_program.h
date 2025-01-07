@@ -23,6 +23,7 @@
 #include "drake/common/autodiff.h"
 #include "drake/common/drake_assert.h"
 #include "drake/common/drake_copyable.h"
+#include "drake/common/drake_deprecated.h"
 #include "drake/common/eigen_types.h"
 #include "drake/common/fmt.h"
 #include "drake/common/polynomial.h"
@@ -196,6 +197,13 @@ class MathematicalProgram {
    * for more information.
    */
   [[nodiscard]] std::string to_string() const;
+
+  /**
+   * Returns whether it is safe to solve this mathematical program concurrently.
+   * A mathematical program is safe to solve concurrently if all of its cost,
+   * constraints, and visualization callbacks are marked as thread safe.
+   */
+  bool IsThreadSafe() const;
 
   /** Returns a string representation of this program in LaTeX.
    *
@@ -1154,13 +1162,14 @@ class MathematicalProgram {
    */
   Binding<L2NormCost> AddCost(const Binding<L2NormCost>& binding);
 
+  // TODO(hongkai.dai): support L2NormCost in each solver.
   /**
    * Adds an L2 norm cost |Ax+b|₂ (notice this cost is not quadratic since we
    * don't take the square of the L2 norm).
-   * @note Currently only the SnoptSolver and IpoptSolver support kL2NormCost.
+   * @note Currently kL2NormCost is supported by SnoptSolver, IpoptSolver,
+   * GurobiSolver, MosekSolver, ClarabelSolver, and SCSSolver.
    * @pydrake_mkdoc_identifier{3args_A_b_vars}
    */
-  // TODO(hongkai.dai): support L2NormCost in each solver.
   Binding<L2NormCost> AddL2NormCost(
       const Eigen::Ref<const Eigen::MatrixXd>& A,
       const Eigen::Ref<const Eigen::VectorXd>& b,
@@ -1177,6 +1186,19 @@ class MathematicalProgram {
     return AddL2NormCost(A, b, ConcatenateVariableRefList(vars));
   }
 
+  /**
+   * Adds an L2 norm cost |Ax+b|₂ from a symbolic expression which can be
+   * decomposed into sqrt((Ax+b)'(Ax+b)). See
+   * symbolic::DecomposeL2NormExpression for details on the tolerance
+   * parameters.
+   * @throws std::exception if @p e cannot be decomposed into an L2 norm.
+   * @pydrake_mkdoc_identifier{expression}
+   */
+  Binding<L2NormCost> AddL2NormCost(const symbolic::Expression& e,
+                                    double psd_tol = 1e-8,
+                                    double coefficient_tol = 1e-8);
+
+  // TODO(hongkai.dai) Decide whether to deprecate this.
   /**
    * Adds an L2 norm cost min |Ax+b|₂ as a linear cost min s
    * on the slack variable s, together with a Lorentz cone constraint
@@ -2073,6 +2095,27 @@ class MathematicalProgram {
       const Binding<LorentzConeConstraint>& binding);
 
   /**
+   * Adds a Lorentz cone constraint of the form Ax+b >= |Cx+d|₂ from a symbolic
+   * formula with one side which can be decomposed into sqrt((Cx+d)'(Cx+d)).
+   *
+   * @param eval_type The evaluation type when evaluating the lorentz cone
+   * constraint in generic optimization. Refer to
+   * LorentzConeConstraint::EvalType for more details.
+   *
+   * See symbolic::DecomposeL2NormExpression for details on the tolerance
+   * parameters, @p psd_tol and @p coefficient_tol. Consider using the overload
+   * which takes a vector of expressions to avoid the numerical decomposition.
+   *
+   * @throws std::exception if @p f cannot be decomposed into a Lorentz cone.
+   * @pydrake_mkdoc_identifier{formula}
+   */
+  Binding<LorentzConeConstraint> AddLorentzConeConstraint(
+      const symbolic::Formula& f,
+      LorentzConeConstraint::EvalType eval_type =
+          LorentzConeConstraint::EvalType::kConvexSmooth,
+      double psd_tol = 1e-8, double coefficient_tol = 1e-8);
+
+  /**
    * Adds Lorentz cone constraint referencing potentially a subset of the
    * decision variables.
    * @param v An Eigen::Vector of symbolic::Expression. Constraining that
@@ -2557,9 +2600,9 @@ class MathematicalProgram {
    * expressions @p e. We create a new symmetric matrix of variables M being
    * positive semidefinite, with the linear equality constraint e == M.
    * @param e Imposes constraint "e is positive semidefinite".
-   * @pre{1. e is symmetric.
-   *      2. e(i, j) is linear for all i, j
-   *      }
+   * @pre e is symmetric.
+   * @pre e(i, j) is linear for all i, j
+   *
    * @return The newly added positive semidefinite constraint, with the bound
    * variable M that are also newly added.
    *
@@ -2576,18 +2619,12 @@ class MathematicalProgram {
    *      x+y,     0,   x;
    * prog.AddPositiveSemidefiniteConstraint(e);
    * @endcode
+   * @note This function will add additional variables and linear equality
+   * constraints. Consider calling AddLinearMatrixInequalityConstraint(e), which
+   * doesn't introduce new variables or linear equality constraints.
    */
   Binding<PositiveSemidefiniteConstraint> AddPositiveSemidefiniteConstraint(
-      const Eigen::Ref<const MatrixX<symbolic::Expression>>& e) {
-    // TODO(jwnimmer-tri) Move this whole function definition into the cc file.
-    DRAKE_THROW_UNLESS(e.rows() == e.cols());
-    DRAKE_ASSERT(CheckStructuralEquality(e, e.transpose().eval()));
-    const MatrixXDecisionVariable M = NewSymmetricContinuousVariables(e.rows());
-    // Adds the linear equality constraint that M = e.
-    AddLinearEqualityConstraint(
-        e - M, Eigen::MatrixXd::Zero(e.rows(), e.rows()), true);
-    return AddPositiveSemidefiniteConstraint(M);
-  }
+      const Eigen::Ref<const MatrixX<symbolic::Expression>>& e);
 
   /**
    * Adds a constraint that the principal submatrix of a symmetric matrix
@@ -2597,7 +2634,7 @@ class MathematicalProgram {
    * @pre All values in  `minor_indices` lie in the range [0,
    * symmetric_matrix_var.rows() - 1].
    * @param symmetric_matrix_var A symmetric MatrixDecisionVariable object.
-   * @see AddPositiveSemidefiniteConstraint.
+   * @see AddPositiveSemidefiniteConstraint
    */
   Binding<PositiveSemidefiniteConstraint> AddPrincipalSubmatrixIsPsdConstraint(
       const Eigen::Ref<const MatrixXDecisionVariable>& symmetric_matrix_var,
@@ -2612,9 +2649,14 @@ class MathematicalProgram {
    * @pre All values in  `minor_indices` lie in the range [0,
    * symmetric_matrix_var.rows() - 1].
    * @param e Imposes constraint "e is positive semidefinite".
-   * @see AddPositiveSemidefiniteConstraint.
+   * @see AddLinearMatrixInequalityConstraint.
+   * @note the return type is Binding<LinearMatrixInequalityConstraint>,
+   * different from the overloaded function above which returns
+   * Binding<PositiveSemidefiniteConstraint>. We impose the constraint as an LMI
+   * so as to add fewer additional variables and constraints.
    */
-  Binding<PositiveSemidefiniteConstraint> AddPrincipalSubmatrixIsPsdConstraint(
+  Binding<LinearMatrixInequalityConstraint>
+  AddPrincipalSubmatrixIsPsdConstraint(
       const Eigen::Ref<const MatrixX<symbolic::Expression>>& e,
       const std::set<int>& minor_indices);
 
@@ -2630,18 +2672,31 @@ class MathematicalProgram {
    * Adds a linear matrix inequality constraint to the program.
    */
   Binding<LinearMatrixInequalityConstraint> AddLinearMatrixInequalityConstraint(
-      const std::vector<Eigen::Ref<const Eigen::MatrixXd>>& F,
-      const VariableRefList& vars) {
+      std::vector<Eigen::MatrixXd> F, const VariableRefList& vars) {
     return AddLinearMatrixInequalityConstraint(
-        F, ConcatenateVariableRefList(vars));
+        std::move(F), ConcatenateVariableRefList(vars));
   }
 
   /**
    * Adds a linear matrix inequality constraint to the program.
    */
   Binding<LinearMatrixInequalityConstraint> AddLinearMatrixInequalityConstraint(
-      const std::vector<Eigen::Ref<const Eigen::MatrixXd>>& F,
+      std::vector<Eigen::MatrixXd> F,
       const Eigen::Ref<const VectorXDecisionVariable>& vars);
+
+  /**
+   * Adds a linear matrix inequality constraint on a symmetric matrix of
+   * symbolic expressions `X`, namely `X` is positive semidefinite, and each
+   * entry in `X` is a linear (affine) expression of decision variables.
+   *
+   * @param X Imposes constraint "X is positive semidefinite".
+   * @pre X is symmetric.
+   * @pre X(i, j) is linear (affine) for all i, j
+   *
+   * @return The newly added linear matrix inequality constraint.
+   */
+  Binding<LinearMatrixInequalityConstraint> AddLinearMatrixInequalityConstraint(
+      const Eigen::Ref<const MatrixX<symbolic::Expression>>& X);
 
   /**
    * Adds the constraint that a symmetric matrix is diagonally dominant with
@@ -3193,19 +3248,31 @@ class MathematicalProgram {
    */
   const SolverOptions& solver_options() const { return solver_options_; }
 
-  const std::unordered_map<std::string, double>& GetSolverOptionsDouble(
+  DRAKE_DEPRECATED("2025-09-01", "Use the solver_options() accessor, instead")
+  std::unordered_map<std::string, double> GetSolverOptionsDouble(
       const SolverId& solver_id) const {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     return solver_options_.GetOptionsDouble(solver_id);
+#pragma GCC diagnostic pop
   }
 
-  const std::unordered_map<std::string, int>& GetSolverOptionsInt(
+  DRAKE_DEPRECATED("2025-09-01", "Use the solver_options() accessor, instead")
+  std::unordered_map<std::string, int> GetSolverOptionsInt(
       const SolverId& solver_id) const {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     return solver_options_.GetOptionsInt(solver_id);
+#pragma GCC diagnostic pop
   }
 
-  const std::unordered_map<std::string, std::string>& GetSolverOptionsStr(
+  DRAKE_DEPRECATED("2025-09-01", "Use the solver_options() accessor, instead")
+  std::unordered_map<std::string, std::string> GetSolverOptionsStr(
       const SolverId& solver_id) const {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     return solver_options_.GetOptionsStr(solver_id);
+#pragma GCC diagnostic pop
   }
 
   /**
@@ -3618,17 +3685,29 @@ class MathematicalProgram {
   //@}
 
   /**
+   * Remove `var` from this program's decision variable.
+   * @note after removing the variable, the indices of some remaining variables
+   * inside this MathematicalProgram will change.
+   * @return the index of `var` in this optimization program. return -1 if `var`
+   * is not a decision variable.
+   * @throw exception if `var` is bound with any cost or constraint.
+   * @throw exception if `var` is not a decision variable of the program.
+   */
+  int RemoveDecisionVariable(const symbolic::Variable& var);
+
+  /**
    * @anchor remove_cost_constraint
-   * @name    Remove costs or constraints
-   * Removes costs or constraints from this program. If this program contains
-   * multiple costs/constraints objects matching the given argument, then all of
-   * these costs/constraints are removed. If this program doesn't contain the
-   * specified cost/constraint, then the code does nothing. We regard two
-   * costs/constraints being equal, if their evaluators point to the same
-   * object, and the associated variables are also the same.
-   * @note If two costs/constraints represent the same expression, but their
-   * evaluators point to different objects, then they are NOT regarded the same.
-   * For example, if we have
+   * @name    Remove costs, constraints or callbacks.
+   * Removes costs, constraints or visualization callbacks from this program. If
+   * this program contains multiple costs/constraints/callbacks objects matching
+   * the given argument, then all of these costs/constraints/callbacks are
+   * removed. If this program doesn't contain the specified
+   * cost/constraint/callback, then the code does nothing. We regard two
+   * costs/constraints/callbacks being equal, if their evaluators point to the
+   * same object, and the associated variables are also the same.
+   * @note If two costs/constraints/callbacks represent the same expression, but
+   * their evaluators point to different objects, then they are NOT regarded the
+   * same. For example, if we have
    * @code{.cc}
    * auto cost1 = prog.AddLinearCost(x[0] + x[1]);
    * auto cost2 = prog.AddLinearCost(x[0] + x[1]);
@@ -3643,8 +3722,8 @@ class MathematicalProgram {
 
   // @{
   /** Removes @p cost from this mathematical program.
-   * See @ref remove_cost_constraint "Remove costs or constraints" for more
-   * details.
+   * See @ref remove_cost_constraint "Remove costs, constraints or callbacks"
+   * for more details.
    * @return number of cost objects removed from this program. If this program
    * doesn't contain @p cost, then returns 0. If this program contains multiple
    * @p cost objects, then returns the repetition of @p cost in this program.
@@ -3652,8 +3731,8 @@ class MathematicalProgram {
   int RemoveCost(const Binding<Cost>& cost);
 
   /** Removes @p constraint from this mathematical program.
-   * See @ref remove_cost_constraint "Remove costs or constraints" for more
-   * details.
+   * See @ref remove_cost_constraint "Remove costs, constraints or callbacks"
+   * for more details.
    * @return number of constraint objects removed from this program. If this
    * program doesn't contain @p constraint, then returns 0. If this program
    * contains multiple
@@ -3661,6 +3740,18 @@ class MathematicalProgram {
    * program.
    */
   int RemoveConstraint(const Binding<Constraint>& constraint);
+
+  /** Removes @p callback from this mathematical program.
+   * See @ref remove_cost_constraint "Remove costs, constraints or callbacks"
+   * for more details.
+   * @return number of callback objects removed from this program. If this
+   * program doesn't contain @p callback, then returns 0. If this program
+   * contains multiple
+   * @p callback objects, then returns the repetition of @p callback in this
+   * program.
+   */
+  int RemoveVisualizationCallback(
+      const Binding<VisualizationCallback>& callback);
   //@}
 
  private:

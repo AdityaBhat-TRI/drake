@@ -15,10 +15,12 @@ namespace geometry {
 namespace optimization {
 
 /** Axis-aligned hyperrectangle in Rᵈ defined by its lower bounds and upper
- * bounds as {x| lb ≤ x ≤ ub} */
+ bounds as {x| lb ≤ x ≤ ub}
+ @ingroup geometry_optimization
+ */
 class Hyperrectangle final : public ConvexSet {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Hyperrectangle)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Hyperrectangle);
 
   /** Constructs a default (zero-dimensional, nonempty) hyperrectangle. */
   Hyperrectangle();
@@ -29,6 +31,8 @@ class Hyperrectangle final : public ConvexSet {
    @pre lb(i) <= ub(i) for all i */
   Hyperrectangle(const Eigen::Ref<const Eigen::VectorXd>& lb,
                  const Eigen::Ref<const Eigen::VectorXd>& ub);
+
+  ~Hyperrectangle() final;
 
   /** Get the lower bounds of the hyperrectangle. */
   const Eigen::VectorXd& lb() const { return lb_; }
@@ -67,6 +71,13 @@ class Hyperrectangle final : public ConvexSet {
     CheckInvariants();
   }
 
+  /** A Hyperrectangle is always bounded, since infinite lower and upper bounds
+  are prohibited.
+  @param parallelism Ignored -- no parallelization is used.
+  @note See @ref ConvexSet::IsBounded "parent class's documentation" for more
+  details. */
+  using ConvexSet::IsBounded;
+
  private:
   std::unique_ptr<ConvexSet> DoClone() const final;
 
@@ -75,14 +86,14 @@ class Hyperrectangle final : public ConvexSet {
   bool DoIsEmpty() const final { return false; }
 
   /** We only support finite hyperrectangles */
-  std::optional<bool> DoIsBoundedShortcut() const final { return true; }
+  std::optional<bool> DoIsBoundedShortcut() const final;
 
   std::optional<Eigen::VectorXd> DoMaybeGetPoint() const final;
 
   std::optional<Eigen::VectorXd> DoMaybeGetFeasiblePoint() const final;
 
-  bool DoPointInSet(const Eigen::Ref<const Eigen::VectorXd>& x,
-                    double tol) const final;
+  std::optional<bool> DoPointInSetShortcut(
+      const Eigen::Ref<const Eigen::VectorXd>& x, double tol) const final;
 
   std::pair<VectorX<symbolic::Variable>,
             std::vector<solvers::Binding<solvers::Constraint>>>
@@ -108,6 +119,11 @@ class Hyperrectangle final : public ConvexSet {
 
   std::pair<std::unique_ptr<Shape>, math::RigidTransformd> DoToShapeWithPose()
       const final;
+
+  std::unique_ptr<ConvexSet> DoAffineHullShortcut(
+      std::optional<double> tol) const final;
+
+  // TODO(Alexandre.Amice) Implement DoProjectionShortcut.
 
   double DoCalcVolume() const final;
 

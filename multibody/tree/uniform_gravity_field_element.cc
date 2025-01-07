@@ -16,8 +16,10 @@ UniformGravityFieldElement<T>::UniformGravityFieldElement()
 
 template <typename T>
 UniformGravityFieldElement<T>::UniformGravityFieldElement(Vector3<double> g_W)
-    : ForceElement<T>(world_model_instance()),
-      g_W_(g_W) {}
+    : ForceElement<T>(world_model_instance()), g_W_(g_W) {}
+
+template <typename T>
+UniformGravityFieldElement<T>::~UniformGravityFieldElement() = default;
 
 template <typename T>
 void UniformGravityFieldElement<T>::set_enabled(
@@ -195,8 +197,7 @@ T UniformGravityFieldElement<T>::CalcConservativePower(
 
 template <typename T>
 T UniformGravityFieldElement<T>::CalcNonConservativePower(
-    const systems::Context<T>&,
-    const internal::PositionKinematicsCache<T>&,
+    const systems::Context<T>&, const internal::PositionKinematicsCache<T>&,
     const internal::VelocityKinematicsCache<T>&) const {
   // A uniform gravity field is conservative. Therefore return zero power.
   return 0.0;
@@ -230,4 +231,4 @@ UniformGravityFieldElement<T>::DoCloneToScalar(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::UniformGravityFieldElement)
+    class ::drake::multibody::UniformGravityFieldElement);

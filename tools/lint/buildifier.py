@@ -10,22 +10,25 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 from subprocess import Popen, PIPE, STDOUT
 
-from drake.tools.lint.find_data import find_data
-from drake.tools.lint.util import find_all_sources
+from python import runfiles
 
-# These match data=[] in our BUILD.bazel file.
-_BUILDIFIER = "external/buildifier/buildifier"
-_TABLES = "tools/lint/buildifier-tables.json"
+from tools.lint.util import find_all_sources
 
 
 def _make_buildifier_command():
     """Returns a list starting with the buildifier executable, followed by any
     required default arguments."""
-    return [
-        find_data(_BUILDIFIER),
-        "-add_tables={}".format(find_data(_TABLES))]
+    manifest = runfiles.Create()
+    buildifier = manifest.Rlocation("buildifier/buildifier")
+    tables = manifest.Rlocation("drake/tools/lint/buildifier-tables.json")
+    assert buildifier is not None
+    assert tables is not None
+    buildifier = Path(buildifier).absolute()
+    tables = Path(tables).absolute()
+    return [buildifier, f"-add_tables={tables}"]
 
 
 def _help(command):
@@ -112,6 +115,10 @@ def main(workspace_name="drake"):
             sys.exit(1)
         argv.extend(found)
 
+    # Make cwd be what the user expected, not the runfiles tree.
+    if "BUILD_WORKING_DIRECTORY" in os.environ:
+        os.chdir(os.environ["BUILD_WORKING_DIRECTORY"])
+
     # Provide helpful diagnostics when in check mode.  Buildifier's -mode=check
     # uses exitcode 0 even when lint exists; we use whether or not its output
     # was empty to tell whether there was lint.
@@ -133,13 +140,6 @@ def main(workspace_name="drake"):
                       one_file)
         print("NOTE: see https://drake.mit.edu/bazel.html#buildifier")
         return 1
-
-    # In fix mode, disallow running from within the Bazel sandbox.
-    if "-mode=diff" not in argv and "--mode=diff" not in argv:
-        if os.getcwd().endswith(".runfiles/drake"):
-            print("ERROR: do not use 'bazel run' for buildifier in fix mode")
-            print("ERROR: use bazel-bin/tools/lint/buildifier instead")
-            return 1
 
     # In fix or diff mode, just let buildifier do its thing.
     return subprocess.call(tool_cmds + argv)

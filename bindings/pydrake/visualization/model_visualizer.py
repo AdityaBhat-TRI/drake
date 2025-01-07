@@ -28,7 +28,7 @@ Refer to the instructions printed by ``--help`` for additional details.
 An example of viewing an iiwa model file::
 
   python3 -m pydrake.visualization.model_visualizer --open-window \
-        package://drake/manipulation/models/iiwa_description/iiwa7/iiwa7_with_box_collision.sdf
+        package://drake_models/iiwa_description/sdf/iiwa7_with_box_collision.sdf
 
 This program respects the ``ROS_PACKAGE_PATH``; if your model uses external
 resources then you will need to set that environment variable.
@@ -38,6 +38,7 @@ import argparse
 import logging
 import os
 from pathlib import Path
+import textwrap
 
 from pydrake.visualization._model_visualizer import \
     ModelVisualizer as _ModelVisualizer
@@ -99,6 +100,17 @@ def _main():
              "It must be an image type normally used by your browser (e.g., "
              ".jpg, .png, etc.). HDR images are not supported yet."
     )
+    args_parser.add_argument(
+        "--compliance_type", default=defaults["compliance_type"],
+        help=textwrap.dedent("""Overrides the DefaultProximityProperties
+        setting with same name. Can be set to either 'rigid' or 'compliant' for
+        hydroelastic contact, or 'undefined' to use point contact.  When a
+        model file doesn't say something more specific for the hydroelastic
+        compliance mode, this default will take effect.  In the common case of
+        model files that have not been customized for Drake, this is a
+        convenient way to visualize what collisions would look like under the
+        given hydroelastic mode."""),
+    )
 
     args_parser.add_argument(
         "--triad_length",
@@ -145,7 +157,8 @@ def _main():
                                   triad_opacity=args.triad_opacity,
                                   browser_new=args.browser_new,
                                   pyplot=args.pyplot,
-                                  environment_map=args.environment_map)
+                                  environment_map=args.environment_map,
+                                  compliance_type=args.compliance_type)
     package_map = visualizer.package_map()
     package_map.PopulateFromRosPackagePath()
     for item in args.filename:
@@ -153,6 +166,17 @@ def _main():
             visualizer.AddModels(url=item)
         else:
             visualizer.AddModels(item)
+
+    # Not all model files are compatible with computing dynamics (e.g., they
+    # might have zero-mass floating bodies). We'll try computing to see if it
+    # works, but if not then we'll need to turn off contact visualization.
+    try:
+        visualizer.Finalize()
+    except RuntimeError:
+        logging.warning("Contact results cannot be visualized")
+        visualizer._publish_contacts = False
+        visualizer._reload()
+
     visualizer.Run(position=args.position, loop_once=args.loop_once)
 
 

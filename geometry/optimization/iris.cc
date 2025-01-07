@@ -18,6 +18,11 @@
 #include "drake/geometry/optimization/vpolytope.h"
 #include "drake/math/autodiff_gradient.h"
 #include "drake/multibody/plant/multibody_plant.h"
+#include "drake/multibody/tree/joint.h"
+#include "drake/multibody/tree/planar_joint.h"
+#include "drake/multibody/tree/quaternion_floating_joint.h"
+#include "drake/multibody/tree/revolute_joint.h"
+#include "drake/multibody/tree/rpy_floating_joint.h"
 #include "drake/solvers/choose_best_solver.h"
 #include "drake/solvers/ipopt_solver.h"
 #include "drake/solvers/snopt_solver.h"
@@ -34,6 +39,7 @@ using math::RigidTransform;
 using multibody::Frame;
 using multibody::JacobianWrtVariable;
 using multibody::MultibodyPlant;
+using multibody::QuaternionFloatingJoint;
 using solvers::Binding;
 using solvers::Constraint;
 using solvers::MathematicalProgram;
@@ -48,7 +54,6 @@ HPolyhedron Iris(const ConvexSets& obstacles, const Ref<const VectorXd>& sample,
   for (int i = 0; i < N; ++i) {
     DRAKE_DEMAND(obstacles[i]->ambient_dimension() == dim);
   }
-  DRAKE_DEMAND(domain.IsBounded());
   const double kEpsilonEllipsoid = 1e-2;
   Hyperellipsoid E = options.starting_ellipse.value_or(
       Hyperellipsoid::MakeHypersphere(kEpsilonEllipsoid, sample));
@@ -63,6 +68,10 @@ HPolyhedron Iris(const ConvexSets& obstacles, const Ref<const VectorXd>& sample,
   if (options.bounding_region) {
     DRAKE_DEMAND(options.bounding_region->ambient_dimension() == dim);
     P = P.Intersection(*options.bounding_region);
+  }
+
+  if (options.verify_domain_boundedness) {
+    DRAKE_DEMAND(P.IsBounded());
   }
 
   const int num_initial_constraints = P.A().rows();
@@ -149,7 +158,7 @@ namespace {
 // Constructs a ConvexSet for each supported Shape and adds it to the set.
 class IrisConvexSetMaker final : public ShapeReifier {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(IrisConvexSetMaker)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(IrisConvexSetMaker);
 
   IrisConvexSetMaker(const QueryObject<double>& query,
                      std::optional<FrameId> reference_frame)
@@ -247,7 +256,7 @@ namespace {
 // constraint that is the negation of one index and one (lower/upper) bound.
 class CounterExampleConstraint : public Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(CounterExampleConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(CounterExampleConstraint);
 
   explicit CounterExampleConstraint(const MathematicalProgram* prog)
       : Constraint(1, prog->num_vars(),
@@ -369,10 +378,11 @@ class CounterExampleProgram {
   // Sets `closest` to an optimizing solution q*, if a solution is found.
   bool Solve(const solvers::SolverInterface& solver,
              const Eigen::Ref<const Eigen::VectorXd>& q_guess,
+             const std::optional<solvers::SolverOptions>& solver_options,
              VectorXd* closest) {
     prog_.SetInitialGuess(q_, q_guess);
     solvers::MathematicalProgramResult result;
-    solver.Solve(prog_, std::nullopt, std::nullopt, &result);
+    solver.Solve(prog_, std::nullopt, solver_options, &result);
     if (result.is_success()) {
       *closest = result.GetSolution(q_);
       return true;
@@ -464,6 +474,52 @@ bool CheckTerminate(const IrisOptions& options, const HPolyhedron& P,
   return false;
 }
 
+/* Given a joint, check if it is encompassed by the continuous revolute
+framework. If so, return a vector of indices i that represent an angle-valued
+coordinate in configuration space, and should be automatically bounded. If the
+joint is not encompassed by the continuous revolute framework, return an empty
+vector. */
+std::vector<int> revolute_joint_indices(const multibody::Joint<double>& joint) {
+  if (joint.type_name() == multibody::RevoluteJoint<double>::kTypeName) {
+    DRAKE_ASSERT(joint.num_positions() == 1);
+    // RevoluteJoints store their configuration as (θ)
+    if (joint.position_lower_limits()[0] ==
+            -std::numeric_limits<float>::infinity() &&
+        joint.position_upper_limits()[0] ==
+            std::numeric_limits<float>::infinity()) {
+      return std::vector<int>{joint.position_start() + 0};
+    }
+  }
+  if (joint.type_name() == multibody::PlanarJoint<double>::kTypeName) {
+    DRAKE_ASSERT(joint.num_positions() == 3);
+    // PlanarJoints store their configuration as (x, y, θ)
+    if (joint.position_lower_limits()[2] ==
+            -std::numeric_limits<float>::infinity() &&
+        joint.position_upper_limits()[2] ==
+            std::numeric_limits<float>::infinity()) {
+      return std::vector<int>{joint.position_start() + 2};
+    }
+  }
+  if (joint.type_name() == multibody::RpyFloatingJoint<double>::kTypeName) {
+    DRAKE_ASSERT(joint.num_positions() == 6);
+    // RpyFloatingJoints store their configuration as (qx, qy, qz, x, y, z),
+    // i.e., the first three positions are the revolute components.
+    std::vector<int> continuous_revolute_indices;
+    for (int i = 0; i < 3; ++i) {
+      if (joint.position_lower_limits()[i] ==
+              -std::numeric_limits<float>::infinity() &&
+          joint.position_upper_limits()[i] ==
+              std::numeric_limits<float>::infinity()) {
+        continuous_revolute_indices.push_back(joint.position_start() + i);
+      }
+    }
+    return continuous_revolute_indices;
+  }
+  // TODO(cohnt): Add support for other joint types that may be compatible with
+  // the continuous revolute framework.
+  return std::vector<int>{};
+}
+
 }  // namespace
 
 HPolyhedron IrisInConfigurationSpace(const MultibodyPlant<double>& plant,
@@ -475,9 +531,30 @@ HPolyhedron IrisInConfigurationSpace(const MultibodyPlant<double>& plant,
   const Eigen::VectorXd seed = plant.GetPositions(context);
   const int nc = static_cast<int>(options.configuration_obstacles.size());
   // Note: We require finite joint limits to define the bounding box for the
-  // IRIS algorithm.
-  DRAKE_DEMAND(plant.GetPositionLowerLimits().array().isFinite().all());
-  DRAKE_DEMAND(plant.GetPositionUpperLimits().array().isFinite().all());
+  // IRIS algorithm. The exception is revolute joints -- continuous revolute
+  // joints will have their lower boundary set to seed - π/2 +
+  // options.convexity_radius_stepback and their upper boundary set to seed
+  // + π/2 - options.convexity_radius_stepback.
+
+  Eigen::VectorXd lower_limits = plant.GetPositionLowerLimits();
+  Eigen::VectorXd upper_limits = plant.GetPositionUpperLimits();
+
+  DRAKE_THROW_UNLESS(options.convexity_radius_stepback < M_PI_2);
+  for (multibody::JointIndex index : plant.GetJointIndices()) {
+    const multibody::Joint<double>& joint = plant.get_joint(index);
+    if (joint.type_name() == QuaternionFloatingJoint<double>::kTypeName) {
+      throw std::runtime_error(
+          "IrisInConfigurationSpace does not support QuaternionFloatingJoint. "
+          "Consider using RpyFloatingJoint instead.");
+    }
+    const std::vector<int> continuous_revolute_indices =
+        revolute_joint_indices(joint);
+    for (const int i : continuous_revolute_indices) {
+      lower_limits[i] = seed[i] - M_PI_2 + options.convexity_radius_stepback;
+      upper_limits[i] = seed[i] + M_PI_2 - options.convexity_radius_stepback;
+    }
+  }
+
   DRAKE_DEMAND(options.num_collision_infeasible_samples >= 0);
   for (int i = 0; i < nc; ++i) {
     DRAKE_DEMAND(options.configuration_obstacles[i]->ambient_dimension() == nq);
@@ -493,13 +570,48 @@ HPolyhedron IrisInConfigurationSpace(const MultibodyPlant<double>& plant,
   }
 
   // Make the polytope and ellipsoid.
-  HPolyhedron P = HPolyhedron::MakeBox(plant.GetPositionLowerLimits(),
-                                       plant.GetPositionUpperLimits());
-  DRAKE_DEMAND(P.A().rows() == 2 * nq);
+  MatrixXd A_init = MatrixXd::Zero(2 * ssize(lower_limits), nq);
+  VectorXd b_init = VectorXd::Zero(2 * ssize(lower_limits));
+  int row_count = 0;
+  for (int i = 0; i < ssize(upper_limits); ++i) {
+    if (std::isfinite(upper_limits[i])) {
+      A_init(row_count, i) = 1;
+      b_init(row_count) = upper_limits[i];
+      ++row_count;
+    }
+    if (std::isfinite(lower_limits[i])) {
+      A_init(row_count, i) = -1;
+      b_init(row_count) = -lower_limits[i];
+      ++row_count;
+    }
+  }
+  A_init.conservativeResize(row_count, nq);
+  b_init.conservativeResize(row_count);
+  HPolyhedron P(A_init, b_init);
 
+  bool boundedness_error = false;
   if (options.bounding_region) {
     DRAKE_DEMAND(options.bounding_region->ambient_dimension() == nq);
     P = P.Intersection(*options.bounding_region);
+    if (options.verify_domain_boundedness) {
+      if (!P.IsBounded()) {
+        boundedness_error = true;
+      }
+    }
+  } else {
+    if (lower_limits.array().isInf().any() ||
+        upper_limits.array().isInf().any()) {
+      boundedness_error = true;
+    }
+  }
+
+  if (boundedness_error) {
+    throw std::runtime_error(
+        "IrisInConfigurationSpace requires that the initial domain be bounded. "
+        "Make sure all joints have position limits (unless that joint is a "
+        "RevoluteJoint or the revolute component of a PlanarJoint or "
+        "RpyFloatingJoint), or ensure that the intersection of the joint "
+        "limits and options.bounding_region is bounded.");
   }
 
   const double kEpsilonEllipsoid = 1e-2;
@@ -533,9 +645,10 @@ HPolyhedron IrisInConfigurationSpace(const MultibodyPlant<double>& plant,
   std::map<std::pair<GeometryId, GeometryId>, std::vector<VectorXd>>
       counter_examples;
 
-  // As a surrogate for the true objective, the pairs are sorted by the distance
-  // between each collision pair from the seed point configuration. This could
-  // improve computation times and produce regions with fewer faces.
+  // As a surrogate for the true objective, the pairs are sorted by the
+  // distance between each collision pair from the seed point configuration.
+  // This could improve computation times and produce regions with fewer
+  // faces.
   std::vector<GeometryPairWithDistance> sorted_pairs;
   for (const auto& [geomA, geomB] : pairs) {
     const double distance =
@@ -551,9 +664,9 @@ HPolyhedron IrisInConfigurationSpace(const MultibodyPlant<double>& plant,
   }
   std::sort(sorted_pairs.begin(), sorted_pairs.end());
 
-  // On each iteration, we will build the collision-free polytope represented as
-  // {x | A * x <= b}.  Here we pre-allocate matrices with a generous maximum
-  // size.
+  // On each iteration, we will build the collision-free polytope represented
+  // as {x | A * x <= b}.  Here we pre-allocate matrices with a generous
+  // maximum size.
   Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> A(
       P.A().rows() + 2 * n + nc, nq);
   VectorXd b(P.A().rows() + 2 * n + nc);
@@ -578,8 +691,8 @@ HPolyhedron IrisInConfigurationSpace(const MultibodyPlant<double>& plant,
             "seed point. The seed point must be feasible.");
       }
     }
-    // Handle bounding box and linear constraints as a special case (extracting
-    // them from the additional_constraint_bindings).
+    // Handle bounding box and linear constraints as a special case
+    // (extracting them from the additional_constraint_bindings).
     auto AddConstraint = [&](const Eigen::MatrixXd& new_A,
                              const Eigen::VectorXd& new_b,
                              const solvers::VectorXDecisionVariable& vars) {
@@ -669,7 +782,8 @@ HPolyhedron IrisInConfigurationSpace(const MultibodyPlant<double>& plant,
   while (true) {
     log()->info("IrisInConfigurationSpace iteration {}", iteration);
     int num_constraints = num_initial_constraints;
-    HPolyhedron P_candidate = P;
+    HPolyhedron P_candidate = HPolyhedron(A.topRows(num_initial_constraints),
+                                          b.head(num_initial_constraints));
     DRAKE_ASSERT(best_volume > 0);
     // Find separating hyperplanes
 
@@ -686,8 +800,8 @@ HPolyhedron IrisInConfigurationSpace(const MultibodyPlant<double>& plant,
       std::sort(scaling.begin(), scaling.end());
 
       for (int i = 0; i < nc; ++i) {
-        // Only add a constraint if this obstacle still has overlap with the set
-        // that has been constructed so far on this iteration.
+        // Only add a constraint if this obstacle still has overlap with the
+        // set that has been constructed so far on this iteration.
         if (HPolyhedron(A.topRows(num_constraints), b.head(num_constraints))
                 .IntersectsWith(*obstacles[scaling[i].second])) {
           const VectorXd point = closest_points.col(scaling[i].second);
@@ -761,7 +875,7 @@ HPolyhedron IrisInConfigurationSpace(const MultibodyPlant<double>& plant,
           options.meshcat->SetTransform(path,
                                         RigidTransform<double>(point_to_draw));
         }
-        if (prog.Solve(*solver, guess, &closest)) {
+        if (prog.Solve(*solver, guess, options.solver_options, &closest)) {
           if (do_debugging_visualization) {
             point_to_draw.head(nq) = closest;
             std::string path = fmt::format("iteration{:02}/{:03}/found",
@@ -855,7 +969,8 @@ HPolyhedron IrisInConfigurationSpace(const MultibodyPlant<double>& plant,
                                             falsify_lower_bound);
             while (consecutive_failures <
                    options.num_additional_constraint_infeasible_samples) {
-              if (counter_example_prog->Solve(*solver, guess, &closest)) {
+              if (counter_example_prog->Solve(
+                      *solver, guess, options.solver_options, &closest)) {
                 consecutive_failures = 0;
                 AddTangentToPolytope(E, closest,
                                      options.configuration_space_margin, &A, &b,

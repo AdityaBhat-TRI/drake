@@ -6,6 +6,7 @@
 
 #include "drake/common/eigen_types.h"
 #include "drake/common/nice_type_name.h"
+#include "drake/math/fourth_order_tensor.h"
 
 namespace drake {
 namespace multibody {
@@ -38,9 +39,6 @@ class ConstitutiveModel {
   using T = typename Traits::Scalar;
   using Data = typename Traits::Data;
 
-  /* The number of locations at which the constitutive relationship is
-   evaluated. */
-  static constexpr int num_locations = Data::num_locations;
   /* Is the constitutive model linear. */
   static constexpr bool is_linear = Traits::is_linear;
 
@@ -59,8 +57,7 @@ class ConstitutiveModel {
    Calculates the energy density in reference configuration in unit of J/m³,
    given the deformation gradient related quantities contained in `data`.
    @pre `Psi != nullptr`. */
-  void CalcElasticEnergyDensity(const Data& data,
-                                std::array<T, num_locations>* Psi) const {
+  void CalcElasticEnergyDensity(const Data& data, T* Psi) const {
     DRAKE_ASSERT(Psi != nullptr);
     derived().CalcElasticEnergyDensityImpl(data, Psi);
   }
@@ -68,8 +65,7 @@ class ConstitutiveModel {
   /* Calculates the First Piola stress in unit of Pa, given the deformation
    gradient related quantities contained in `data`.
    @pre `P != nullptr`. */
-  void CalcFirstPiolaStress(const Data& data,
-                            std::array<Matrix3<T>, num_locations>* P) const {
+  void CalcFirstPiolaStress(const Data& data, Matrix3<T>* P) const {
     DRAKE_ASSERT(P != nullptr);
     derived().CalcFirstPiolaStressImpl(data, P);
   }
@@ -98,8 +94,7 @@ class ConstitutiveModel {
                    -------------------------------------
   @pre `dPdF != nullptr`. */
   void CalcFirstPiolaStressDerivative(
-      const Data& data,
-      std::array<Eigen::Matrix<T, 9, 9>, num_locations>* dPdF) const {
+      const Data& data, math::internal::FourthOrderTensor<T>* dPdF) const {
     DRAKE_ASSERT(dPdF != nullptr);
     derived().CalcFirstPiolaStressDerivativeImpl(data, dPdF);
   }
@@ -115,16 +110,14 @@ class ConstitutiveModel {
   /* Derived classes *must* shadow these methods to compute energy
    density, stress, and stress derivatives from the given `data`. The output
    argument is guaranteed to be non-null. */
-  void CalcElasticEnergyDensityImpl(const Data& data,
-                                    std::array<T, num_locations>* Psi) const {
+  void CalcElasticEnergyDensityImpl(const Data& data, T* Psi) const {
     throw std::logic_error(
         fmt::format("The derived class {} must provide a shadow definition of "
                     "CalcElasticEnergyDensityImpl() to be correct.",
                     NiceTypeName::Get(derived())));
   }
 
-  void CalcFirstPiolaStressImpl(
-      const Data& data, std::array<Matrix3<T>, num_locations>* P) const {
+  void CalcFirstPiolaStressImpl(const Data& data, Matrix3<T>* P) const {
     throw std::logic_error(
         fmt::format("The derived class {} must provide a shadow definition of "
                     "CalcFirstPiolaStressImpl() to be correct.",
@@ -132,8 +125,7 @@ class ConstitutiveModel {
   }
 
   void CalcFirstPiolaStressDerivativeImpl(
-      const Data& data,
-      std::array<Eigen::Matrix<T, 9, 9>, num_locations>* dPdF) const {
+      const Data& data, math::internal::FourthOrderTensor<T>* dPdF) const {
     throw std::logic_error(
         fmt::format("The derived class {} must provide a shadow definition of "
                     "CalcFirstPiolaStressDerivativeImpl() to be correct.",

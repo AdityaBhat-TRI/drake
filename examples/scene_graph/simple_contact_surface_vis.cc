@@ -38,6 +38,7 @@ namespace drake {
 namespace examples {
 namespace scene_graph {
 namespace contact_surface {
+namespace {
 
 using Eigen::Vector3d;
 using Eigen::Vector4d;
@@ -104,7 +105,7 @@ constexpr int kCylinderModelInstance = 2;
  */
 class MovingBall final : public LeafSystem<double> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MovingBall)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MovingBall);
 
   explicit MovingBall(SceneGraph<double>* scene_graph) {
     this->DeclareContinuousState(2);
@@ -175,7 +176,7 @@ class MovingBall final : public LeafSystem<double> {
  */
 class ContactResultMaker final : public LeafSystem<double> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ContactResultMaker)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ContactResultMaker);
 
   explicit ContactResultMaker(bool use_strict_hydro = true)
       : use_strict_hydro_{use_strict_hydro} {
@@ -445,6 +446,7 @@ int do_main() {
   return 0;
 }
 
+}  // namespace
 }  // namespace contact_surface
 }  // namespace scene_graph
 }  // namespace examples

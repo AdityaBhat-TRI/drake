@@ -18,7 +18,7 @@
 
 #include <gflags/gflags.h>
 
-#include "drake/common/find_resource.h"
+#include "drake/common/find_runfiles.h"
 #include "drake/common/value.h"
 #include "drake/geometry/drake_visualizer.h"
 #include "drake/geometry/geometry_frame.h"
@@ -45,6 +45,7 @@ namespace drake {
 namespace examples {
 namespace scene_graph {
 namespace contact_surface {
+namespace {
 
 using Eigen::Vector3d;
 using Eigen::Vector4d;
@@ -135,7 +136,7 @@ DEFINE_bool(polygons, true,
  */
 class MovingCompliantGeometry final : public LeafSystem<double> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MovingCompliantGeometry)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MovingCompliantGeometry);
 
   // Ball radius 2.5cm.
   static constexpr double kRadius = 0.025;
@@ -236,7 +237,7 @@ class MovingCompliantGeometry final : public LeafSystem<double> {
  */
 class ContactResultMaker final : public LeafSystem<double> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ContactResultMaker)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ContactResultMaker);
 
   ContactResultMaker() {
     geometry_query_input_port_ =
@@ -353,7 +354,7 @@ int do_main() {
 
   // Rigid anchored bowl with frame B. It is a non-convex mesh.
   std::string bowl_absolute_path =
-      FindResourceOrThrow("drake/geometry/profiling/evo_bowl_no_mtl.obj");
+      FindRunfile("drake_models/dishes/assets/evo_bowl_col.obj").abspath;
   // The bowl's bounding box is about 14.7cm x 14.7cm x 6.1cm with its
   // center at the origin Bo of frame B. Place B at 3.05cm above the ground
   // plane, so the bottom of the bowl is on the ground. Furthermore,
@@ -430,6 +431,7 @@ int do_main() {
   return 0;
 }
 
+}  // namespace
 }  // namespace contact_surface
 }  // namespace scene_graph
 }  // namespace examples

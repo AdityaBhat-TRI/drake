@@ -31,9 +31,9 @@ and vertices_.cols() are zero, we treat this as no points in {0}, which is
 empty.
 
 @ingroup geometry_optimization */
-class VPolytope final : public ConvexSet, private ShapeReifier {
+class VPolytope final : public ConvexSet {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(VPolytope)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(VPolytope);
 
   /** Constructs a set with no vertices in the zero-dimensional space, which is
   empty (by convention). */
@@ -54,7 +54,7 @@ class VPolytope final : public ConvexSet, private ShapeReifier {
   @throws std::runtime_error if H is unbounded or if Qhull terminates with an
   error.
   @pydrake_mkdoc_identifier{hpolyhedron} */
-  explicit VPolytope(const HPolyhedron& H, const double tol = 1e-9);
+  explicit VPolytope(const HPolyhedron& H, double tol = 1e-9);
 
   /** Constructs the polytope from a SceneGraph geometry.
   @pydrake_mkdoc_identifier{scenegraph} */
@@ -67,8 +67,11 @@ class VPolytope final : public ConvexSet, private ShapeReifier {
   if we remove any point from its vertices, then the convex hull of the
   remaining vertices is a strict subset of the polytope. In the 2D case the
   vertices of the new VPolytope are ordered counter-clockwise from the negative
-  X axis. For all other cases an order is not guaranteed. */
-  VPolytope GetMinimalRepresentation() const;
+  X axis. For all other cases an order is not guaranteed. If the
+  VPolytope is not full-dimensional, we perform computations in a coordinate
+  system of its affine hull. `tol` specifies the numerical tolerance used in the
+  computation of the affine hull.*/
+  VPolytope GetMinimalRepresentation(double tol = 1e-9) const;
 
   /** Returns true if the point is within `tol` of the set under the L∞-norm.
   Note: This requires the solution of a linear program; the achievable tolerance
@@ -98,6 +101,12 @@ class VPolytope final : public ConvexSet, private ShapeReifier {
   /** Computes the volume of this V-Polytope.
   @note this function calls qhull to compute the volume. */
   using ConvexSet::CalcVolume;
+
+  /** Every VPolytope is bounded by construction.
+  @param parallelism Ignored -- no parallelization is used.
+  @note See @ref ConvexSet::IsBounded "parent class's documentation" for more
+  details. */
+  using ConvexSet::IsBounded;
 
  private:
   std::unique_ptr<ConvexSet> DoClone() const final;
@@ -137,13 +146,10 @@ class VPolytope final : public ConvexSet, private ShapeReifier {
   std::pair<std::unique_ptr<Shape>, math::RigidTransformd> DoToShapeWithPose()
       const final;
 
-  double DoCalcVolume() const final;
+  std::unique_ptr<ConvexSet> DoAffineHullShortcut(
+      std::optional<double> tol) const final;
 
-  // Implement support shapes for the ShapeReifier interface.
-  using ShapeReifier::ImplementGeometry;
-  void ImplementGeometry(const Box& box, void* data) final;
-  void ImplementGeometry(const Convex& convex, void* data) final;
-  void ImplementGeometry(const Mesh& mesh, void* data) final;
+  double DoCalcVolume() const final;
 
   Eigen::MatrixXd vertices_;
 };

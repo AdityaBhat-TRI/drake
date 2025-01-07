@@ -6,8 +6,8 @@ import tempfile
 import unittest
 
 import numpy as np
-
 from pydrake.common import FindResourceOrThrow
+from pydrake.common.test_utilities import numpy_compare
 from pydrake.common.test_utilities.pickle_compare import assert_pickle
 from pydrake.common.value import AbstractValue, Value
 from pydrake.geometry import (
@@ -465,14 +465,33 @@ class TestSensors(unittest.TestCase):
 
         for constructor in [construct, construct_single]:
             sensor = constructor(parent_id, X_WB)
-            check_info(sensor.color_camera_info())
-            check_info(sensor.depth_camera_info())
-            self.assertIsInstance(sensor.X_BC(),
-                                  RigidTransform)
-            self.assertIsInstance(sensor.X_BD(),
-                                  RigidTransform)
-            self.assertEqual(sensor.parent_frame_id(), parent_id)
+            check_info(sensor.default_color_render_camera()
+                       .core().intrinsics())
+            check_info(sensor.default_depth_render_camera()
+                       .core().intrinsics())
+            self.assertIsInstance(sensor.default_X_PB(), RigidTransform)
+            self.assertEqual(sensor.default_parent_frame_id(), parent_id)
+            sensor.set_default_parent_frame_id(parent_id)
+
             check_ports(sensor)
+            # Check parameter API.
+            context = sensor.CreateDefaultContext()
+            self.assertIsInstance(sensor.GetColorRenderCamera(context=context),
+                                  ColorRenderCamera)
+            color_camera = sensor.default_color_render_camera()
+            sensor.SetColorRenderCamera(context=context,
+                                        color_camera=color_camera)
+            self.assertIsInstance(sensor.GetDepthRenderCamera(context=context),
+                                  DepthRenderCamera)
+            depth_camera = sensor.default_depth_render_camera()
+            sensor.SetDepthRenderCamera(context=context,
+                                        depth_camera=depth_camera)
+            self.assertIsInstance(sensor.GetX_PB(context=context),
+                                  RigidTransform)
+            sensor.SetX_PB(context=context, sensor_pose=X_WB)
+            self.assertEqual(sensor.GetParentFrameId(context=context),
+                             parent_id)
+            sensor.SetParentFrameId(context=context, id=parent_id)
 
         # Test discrete camera. We'll simply use the last sensor constructed.
 
@@ -573,3 +592,26 @@ class TestSensors(unittest.TestCase):
             publish_period=0.125,
             start_time=0.0)
         self.assertIsNotNone(input_port)
+
+    @numpy_compare.check_all_types
+    def test_rotary_encoders(self, T):
+        encoders = mut.RotaryEncoders_[T](ticks_per_revolution=[100, 200])
+        self.assertEqual(encoders.get_input_port().size(), 2)
+
+        encoders = mut.RotaryEncoders_[T](
+            input_port_size=5, input_vector_indices=[0, 2])
+        self.assertEqual(encoders.get_input_port().size(), 5)
+
+        encoders = mut.RotaryEncoders_[T](
+            input_port_size=5,
+            input_vector_indices=[0, 2],
+            ticks_per_revolution=[100, 200])
+        self.assertEqual(encoders.get_input_port().size(), 5)
+
+        context = encoders.CreateDefaultContext()
+        offsets = [T(0.1), T(0.2)]
+        encoders.set_calibration_offsets(
+            context=context, calibration_offsets=offsets)
+        numpy_compare.assert_equal(
+            encoders.get_calibration_offsets(context=context),
+            offsets)

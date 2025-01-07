@@ -44,7 +44,7 @@ class RevoluteJointTest : public ::testing::Test {
   std::unique_ptr<internal::MultibodyTree<double>> MakeModel() {
     // Spatial inertia for adding bodies. The actual value is not important for
     // these tests and therefore we do not initialize it.
-    const SpatialInertia<double> M_B;  // Default construction is ok for this.
+    const auto M_B = SpatialInertia<double>::NaN();
 
     // Create an empty model.
     auto model = std::make_unique<internal::MultibodyTree<double>>();
@@ -130,13 +130,6 @@ TEST_F(RevoluteJointTest, Damping) {
 
   // Expect to throw on invalid damping values.
   EXPECT_THROW(joint.set_default_damping(-1), std::exception);
-
-  // Ensure the deprecated versions are correct until removal.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  EXPECT_EQ(joint.damping(), new_damping);
-  EXPECT_EQ(joint.damping_vector(), Vector1d(new_damping));
-#pragma GCC diagnostic pop
 }
 
 // Context-dependent value access.
@@ -179,7 +172,6 @@ TEST_F(RevoluteJointTest, AddInTorques) {
   joint1_->AddInTorque(*context_, some_value, &forces1);
   joint1_->AddInTorque(*context_, some_value, &forces1);
 
-
   MultibodyForces<double> forces2(tree());
   // Add value only once:
   joint1_->AddInTorque(*context_, some_value, &forces2);
@@ -210,7 +202,8 @@ TEST_F(RevoluteJointTest, AddInDampingForces) {
 
 TEST_F(RevoluteJointTest, Clone) {
   auto model_clone = tree().CloneToScalar<AutoDiffXd>();
-  const auto& joint1_clone = model_clone->get_variant(*joint1_);
+  const auto& joint1_clone = dynamic_cast<const RevoluteJoint<AutoDiffXd>&>(
+      model_clone->get_variant(*joint1_));
 
   EXPECT_EQ(joint1_clone.name(), joint1_->name());
   EXPECT_EQ(joint1_clone.frame_on_parent().index(),

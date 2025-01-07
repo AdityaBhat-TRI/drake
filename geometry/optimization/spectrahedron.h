@@ -21,7 +21,7 @@ By convention, a zero-dimensional spectrahedron is considered nonempty.
 @ingroup geometry_optimization */
 class Spectrahedron final : public ConvexSet {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Spectrahedron)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Spectrahedron);
 
   /** Default constructor (yields the zero-dimensional nonempty set). */
   Spectrahedron();
@@ -43,15 +43,24 @@ class Spectrahedron final : public ConvexSet {
   /** @throws  Not implemented. */
   using ConvexSet::CalcVolume;
 
+  /** Spectrahedron uses the generic method for boundedness checking, which uses
+  `parallelism`.
+  @param parallelism The maximum number of threads to use.
+  @note See @ref ConvexSet::IsBounded "parent class's documentation" for more
+  details. */
+  using ConvexSet::IsBounded;
+
  private:
   std::unique_ptr<ConvexSet> DoClone() const final;
 
+  /* We only use DoIsBoundedShortcut here to avoid an edge case that causes an
+  error with the CSDP solver (#19927). */
   std::optional<bool> DoIsBoundedShortcut() const final;
 
   // N.B. No need to override DoMaybeGetPoint here.
 
-  bool DoPointInSet(const Eigen::Ref<const Eigen::VectorXd>& x,
-                    double tol) const final;
+  std::optional<bool> DoPointInSetShortcut(
+      const Eigen::Ref<const Eigen::VectorXd>& x, double tol) const final;
 
   std::pair<VectorX<symbolic::Variable>,
             std::vector<solvers::Binding<solvers::Constraint>>>

@@ -14,41 +14,6 @@ namespace multibody {
 namespace fem {
 namespace internal {
 
-// TODO(xuchenhan-tri): Encapsulate the the memory layout of 4th order tensors
-//  and the contraction operation in a FourthOrderTensor class.
-/* Helper function that performs a contraction between a 4th order tensor A
- and two vectors u and v and returns a matrix B. In Einstein notation, the
- contraction is: Bᵢₖ = uⱼ Aᵢⱼₖₗ vₗ. The 4th order tensor A of dimension
- 3*3*3*3 is flattened to a 9*9 matrix that is organized as following
-
-                  l = 1       l = 2       l = 3
-              -------------------------------------
-              |           |           |           |
-    j = 1     |   Aᵢ₁ₖ₁   |   Aᵢ₁ₖ₂   |   Aᵢ₁ₖ₃   |
-              |           |           |           |
-              -------------------------------------
-              |           |           |           |
-    j = 2     |   Aᵢ₂ₖ₁   |   Aᵢ₂ₖ₂   |   Aᵢ₂ₖ₃   |
-              |           |           |           |
-              -------------------------------------
-              |           |           |           |
-    j = 3     |   Aᵢ₃ₖ₁   |   Aᵢ₃ₖ₂   |   Aᵢ₃ₖ₃   |
-              |           |           |           |
-              -------------------------------------
-Namely the ik-th entry in the jl-th block corresponds to the value Aᵢⱼₖₗ. */
-template <typename T>
-void PerformDoubleTensorContraction(
-    const Eigen::Ref<const Eigen::Matrix<T, 9, 9>>& A,
-    const Eigen::Ref<const Vector3<T>>& u,
-    const Eigen::Ref<const Vector3<T>>& v, EigenPtr<Matrix3<T>> B) {
-  B->setZero();
-  for (int l = 0; l < 3; ++l) {
-    for (int j = 0; j < 3; ++j) {
-      *B += A.template block<3, 3>(3 * j, 3 * l) * u(j) * v(l);
-    }
-  }
-}
-
 /* The data struct that stores per element data for VolumetricElement. See
  FemElement for the requirement. We define it here instead of nesting it in the
  traits class below due to #17109. */
@@ -63,7 +28,10 @@ struct VolumetricElementData {
   Vector<T, num_dofs> element_a;
   /* The current locations of the quadrature points in the world frame. */
   std::array<Vector<T, 3>, num_quadrature_points> quadrature_positions;
-  typename ConstitutiveModelType::Data deformation_gradient_data;
+
+  using DeformationGradientData = typename ConstitutiveModelType::Data;
+  std::array<DeformationGradientData, num_quadrature_points>
+      deformation_gradient_data;
   /* The elastic energy density evaluated at quadrature points. Note that this
    is energy per unit of "reference" volume. */
   std::array<T, num_quadrature_points> Psi;
@@ -71,7 +39,7 @@ struct VolumetricElementData {
   std::array<Matrix3<T>, num_quadrature_points> P;
   /* The derivative of first Piola stress with respect to the deformation
    gradient evaluated at quadrature points. */
-  std::array<Eigen::Matrix<T, 9, 9>, num_quadrature_points> dPdF;
+  std::array<math::internal::FourthOrderTensor<T>, num_quadrature_points> dPdF;
 };
 
 /* Forward declaration needed for defining the traits below. */
@@ -109,11 +77,6 @@ struct FemElementTraits<VolumetricElement<
           IsoparametricElementType::num_sample_locations,
       "The number of quadrature points of the quadrature rule must be the same "
       "as the number of evaluation locations in the isoparametric element.");
-  static_assert(
-      QuadratureType::num_quadrature_points ==
-          ConstitutiveModelType::num_locations,
-      "The number of quadrature points must be the same as the number of "
-      "locations at which the constitutive model is evaluated.");
   /* Check that the natural dimensions are compatible. */
   static_assert(IsoparametricElementType::natural_dimension ==
                     QuadratureType::natural_dimension,
@@ -356,8 +319,8 @@ class VolumetricElement
           /* Note that the scale is negated here because the tensor contraction
            gives the second derivative of energy, which is the opposite of the
            force derivative. */
-          PerformDoubleTensorContraction<T>(
-              data.dPdF[q], dSdX_transpose_[q].col(a),
+          data.dPdF[q].ContractWithVectors(
+              dSdX_transpose_[q].col(a),
               dSdX_transpose_[q].col(b) * reference_volume_[q] * -scale, &K_ab);
           AccumulateMatrixBlock(K_ab, a, b, K);
         }
@@ -409,15 +372,20 @@ class VolumetricElement
         isoparametric_element_.template InterpolateNodalValues<3>(
             element_q_reshaped);
 
-    data.deformation_gradient_data.UpdateData(
-        CalcDeformationGradient(data.element_q),
-        CalcDeformationGradient(data.element_q0));
-    this->constitutive_model().CalcElasticEnergyDensity(
-        data.deformation_gradient_data, &data.Psi);
-    this->constitutive_model().CalcFirstPiolaStress(
-        data.deformation_gradient_data, &data.P);
-    this->constitutive_model().CalcFirstPiolaStressDerivative(
-        data.deformation_gradient_data, &data.dPdF);
+    std::array<Matrix3<T>, num_quadrature_points> F =
+        CalcDeformationGradient(data.element_q);
+    std::array<Matrix3<T>, num_quadrature_points> F0 =
+        CalcDeformationGradient(data.element_q0);
+
+    for (int q = 0; q < num_quadrature_points; ++q) {
+      data.deformation_gradient_data[q].UpdateData(F[q], F0[q]);
+      this->constitutive_model().CalcElasticEnergyDensity(
+          data.deformation_gradient_data[q], &(data.Psi[q]));
+      this->constitutive_model().CalcFirstPiolaStress(
+          data.deformation_gradient_data[q], &(data.P[q]));
+      this->constitutive_model().CalcFirstPiolaStressDerivative(
+          data.deformation_gradient_data[q], &(data.dPdF[q]));
+    }
     return data;
   }
 
@@ -429,9 +397,9 @@ class VolumetricElement
         quadrature_positions = data.quadrature_positions;
     const std::array<Vector<T, num_nodes>, num_quadrature_points>& S =
         isoparametric_element_.GetShapeFunctions();
-    const std::array<Matrix3<T>, num_quadrature_points>& deformation_gradients =
-        data.deformation_gradient_data.deformation_gradient();
     for (int q = 0; q < num_quadrature_points; ++q) {
+      const Matrix3<T>& deformation_gradient =
+          data.deformation_gradient_data[q].deformation_gradient();
       Vector3<T> scaled_force = Vector3<T>::Zero();
       for (const multibody::ForceDensityField<T>* force_density :
            plant_data.force_density_fields) {
@@ -440,7 +408,7 @@ class VolumetricElement
             force_density->density_type() ==
                     multibody::ForceDensityType::kPerReferenceVolume
                 ? 1.0
-                : deformation_gradients[q].determinant();
+                : deformation_gradient.determinant();
         scaled_force += scale *
                         force_density->EvaluateAt(plant_data.plant_context,
                                                   quadrature_positions[q]) *

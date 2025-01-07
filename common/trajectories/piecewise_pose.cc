@@ -22,6 +22,9 @@ PiecewisePose<T>::PiecewisePose(
 }
 
 template <typename T>
+PiecewisePose<T>::~PiecewisePose() = default;
+
+template <typename T>
 PiecewisePose<T> PiecewisePose<T>::MakeLinear(
     const std::vector<T>& times,
     const std::vector<math::RigidTransform<T>>& poses) {
@@ -53,11 +56,6 @@ PiecewisePose<T> PiecewisePose<T>::MakeCubicLinearWithEndLinearVelocity(
       PiecewisePolynomial<T>::CubicWithContinuousSecondDerivatives(
           times, pos_knots, start_vel, end_vel),
       PiecewiseQuaternionSlerp<T>(times, rot_knots));
-}
-
-template <typename T>
-std::unique_ptr<Trajectory<T>> PiecewisePose<T>::Clone() const {
-  return std::make_unique<PiecewisePose>(*this);
 }
 
 template <typename T>
@@ -107,6 +105,11 @@ bool PiecewisePose<T>::IsApprox(const PiecewisePose<T>& other,
 }
 
 template <typename T>
+std::unique_ptr<Trajectory<T>> PiecewisePose<T>::DoClone() const {
+  return std::make_unique<PiecewisePose>(*this);
+}
+
+template <typename T>
 bool PiecewisePose<T>::do_has_derivative() const {
   return true;
 }
@@ -115,7 +118,7 @@ template <typename T>
 MatrixX<T> PiecewisePose<T>::DoEvalDerivative(const T& t,
                                               int derivative_order) const {
   if (derivative_order == 0) {
-    return value(t);
+    return this->value(t);
   }
   Vector6<T> derivative;
   derivative.template head<3>() =
@@ -152,4 +155,4 @@ std::unique_ptr<Trajectory<T>> PiecewisePose<T>::DoMakeDerivative(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::PiecewisePose)
+    class drake::trajectories::PiecewisePose);

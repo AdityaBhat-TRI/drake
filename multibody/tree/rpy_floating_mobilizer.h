@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "drake/common/default_scalars.h"
@@ -32,7 +33,7 @@ namespace internal {
 // amount of θ about the Fx, Fy and Fz axes respectively. Refer to
 // math::RollPitchYaw for further details on this representation. Zero θ₀, θ₁,
 // θ₂ angles and zero position p_FM define the "zero configuration" which
-// corresponds to frames F and M being coincident, see set_zero_state(). Angles
+// corresponds to frames F and M being coincident, see SetZeroState(). Angles
 // θ₀, θ₁, θ₂ are defined to be positive according to the right-hand-rule with
 // the thumb aligned in the direction of their respective axes.
 //
@@ -58,19 +59,34 @@ namespace internal {
 // @note The roll-pitch-yaw (space x-y-z) Euler sequence is also known as the
 // Tait-Bryan angles or Cardan angles.
 //
+//   H_FM₆ₓ₆ = I₆ₓ₆     Hdot_FM₆ₓ₆ = 0₆ₓ₆
+//
 // @tparam_default_scalar
 template <typename T>
 class RpyFloatingMobilizer final : public MobilizerImpl<T, 6, 6> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RpyFloatingMobilizer)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RpyFloatingMobilizer);
+  using MobilizerBase = MobilizerImpl<T, 6, 6>;
+  using MobilizerBase::kNq, MobilizerBase::kNv, MobilizerBase::kNx;
+  template <typename U>
+  using QVector = typename MobilizerBase::template QVector<U>;
+  template <typename U>
+  using VVector = typename MobilizerBase::template VVector<U>;
+  template <typename U>
+  using HMatrix = typename MobilizerBase::template HMatrix<U>;
 
   // Constructor for an RpyFloatingMobilizer between an inboard frame F
   // inboard_frame_F and an outboard frame M outboard_frame_M.
-  RpyFloatingMobilizer(const Frame<T>& inboard_frame_F,
+  RpyFloatingMobilizer(const SpanningForest::Mobod& mobod,
+                       const Frame<T>& inboard_frame_F,
                        const Frame<T>& outboard_frame_M)
-      : MobilizerBase(inboard_frame_F, outboard_frame_M) {}
+      : MobilizerBase(mobod, inboard_frame_F, outboard_frame_M) {}
 
-  bool is_floating() const final { return true; }
+  ~RpyFloatingMobilizer() final;
+
+  std::unique_ptr<internal::BodyNode<T>> CreateBodyNode(
+      const internal::BodyNode<T>* parent_node, const RigidBody<T>* body,
+      const Mobilizer<T>* mobilizer) const final;
 
   bool has_quaternion_dofs() const final { return false; }
 
@@ -79,7 +95,7 @@ class RpyFloatingMobilizer final : public MobilizerImpl<T, 6, 6> {
   std::string position_suffix(int position_index_in_mobilizer) const final;
   std::string velocity_suffix(int velocity_index_in_mobilizer) const final;
 
-  bool can_rotate() const final    { return true; }
+  bool can_rotate() const final { return true; }
   bool can_translate() const final { return true; }
 
   // Returns the generalized positions for this mobilizer stored in context.
@@ -152,8 +168,8 @@ class RpyFloatingMobilizer final : public MobilizerImpl<T, 6, 6> {
   //   θ₀, θ₁, θ₂, described in this class's documentation, at entries
   //   angles(0), angles(1) and angles(2), respectively.
   // @returns a constant reference to this mobilizer.
-  const RpyFloatingMobilizer<T>& set_angles(
-      systems::Context<T>* context, const Vector3<T>& angles) const;
+  const RpyFloatingMobilizer<T>& SetAngles(systems::Context<T>* context,
+                                           const Vector3<T>& angles) const;
 
   // Stores in context the position p_FM of M in F.
   //
@@ -162,8 +178,8 @@ class RpyFloatingMobilizer final : public MobilizerImpl<T, 6, 6> {
   // @param[in] p_FM
   //   Position of F in M.
   // @returns a constant reference to this mobilizer.
-  const RpyFloatingMobilizer<T>& set_translation(
-      systems::Context<T>* context, const Vector3<T>& p_FM) const;
+  const RpyFloatingMobilizer<T>& SetTranslation(systems::Context<T>* context,
+                                                const Vector3<T>& p_FM) const;
 
   // Sets the distribution governing the random samples of the rpy angles
   // component of the mobilizer state.
@@ -183,7 +199,7 @@ class RpyFloatingMobilizer final : public MobilizerImpl<T, 6, 6> {
   //   A vector in ℝ³ with the desired angular velocity of the outboard frame M
   //   in the inboard frame F, expressed in F.
   // @returns a constant reference to this mobilizer.
-  const RpyFloatingMobilizer<T>& set_angular_velocity(
+  const RpyFloatingMobilizer<T>& SetAngularVelocity(
       systems::Context<T>* context, const Vector3<T>& w_FM) const;
 
   // Stores in context the translational velocity v_FM of M in F.
@@ -193,7 +209,7 @@ class RpyFloatingMobilizer final : public MobilizerImpl<T, 6, 6> {
   // @param[in] v_FM
   //   Translational velocity of F in M.
   // @returns a constant reference to this mobilizer.
-  const RpyFloatingMobilizer<T>& set_translational_velocity(
+  const RpyFloatingMobilizer<T>& SetTranslationalVelocity(
       systems::Context<T>* context, const Vector3<T>& v_FM) const;
 
   // Sets context so this mobilizer's generalized coordinates (roll-pitch-yaw
@@ -213,13 +229,37 @@ class RpyFloatingMobilizer final : public MobilizerImpl<T, 6, 6> {
   // Computes the across-mobilizer transform X_FM(q) between the inboard
   // frame F and the outboard frame M as a function of the configuration q
   // stored in context.
+  math::RigidTransform<T> calc_X_FM(const T* q) const {
+    return math::RigidTransform<T>(math::RollPitchYaw<T>(q[0], q[1], q[2]),
+                                   Vector3<T>(q[3], q[4], q[5]));
+  }
+
+  // Computes the across-mobilizer velocity V_FM(q, v) of the outboard frame M
+  // measured and expressed in frame F as a function of the input generalized
+  // velocity v, packed as documented in get_generalized_velocities(). (That's
+  // conveniently just V_FM already.)
+  SpatialVelocity<T> calc_V_FM(const T*, const T* v) const {
+    const Eigen::Map<const VVector<T>> V_FM(v);
+    return SpatialVelocity<T>(V_FM);  // w_FM, v_FM
+  }
+
+  // We chose the generalized velocities for this mobilizer so that H=I, Hdot=0.
+  // Therefore A_FM = H⋅vdot + Hdot⋅v = vdot.
+  SpatialAcceleration<T> calc_A_FM(const T*, const T*, const T* vdot) const {
+    const Eigen::Map<const VVector<T>> A_FM(vdot);
+    return SpatialAcceleration<T>(A_FM);
+  }
+
+  // Returns tau = H_FMᵀ⋅F. H is identity for this mobilizer.
+  void calc_tau(const T*, const SpatialForce<T>& F_BMo_F, T* tau) const {
+    DRAKE_ASSERT(tau != nullptr);
+    Eigen::Map<VVector<T>> tau_as_vector(tau);
+    tau_as_vector = F_BMo_F.get_coeffs();
+  }
+
   math::RigidTransform<T> CalcAcrossMobilizerTransform(
       const systems::Context<T>& context) const final;
 
-  // Computes the across-mobilizer velocity V_FM(q, v) of the outboard frame M
-  // measured and expressed in frame F as a function of the configuration stored
-  // in context and of the input generalized velocity v, packed as documented
-  // in get_generalized_velocities().
   SpatialVelocity<T> CalcAcrossMobilizerSpatialVelocity(
       const systems::Context<T>& context,
       const Eigen::Ref<const VectorX<T>>& v) const final;
@@ -283,6 +323,15 @@ class RpyFloatingMobilizer final : public MobilizerImpl<T, 6, 6> {
                          EigenPtr<VectorX<T>> v) const final;
 
  protected:
+  std::optional<QVector<T>> DoPoseToPositions(
+      const Eigen::Quaternion<T> orientation,
+      const Vector3<T>& translation) const final;
+
+  std::optional<VVector<T>> DoSpatialVelocityToVelocities(
+      const SpatialVelocity<T>& velocity) const final {
+    return velocity.get_coeffs();
+  }
+
   // Implements Mobilizer's NVI, see Mobilizer::CalcNMatrix() for details.
   // @warning The mapping from angular velocity to Euler angle's rates is
   // singular for angle θ₁ such that θ₁ = π/2 + kπ, ∀ k ∈ ℤ. To avoid
@@ -306,16 +355,6 @@ class RpyFloatingMobilizer final : public MobilizerImpl<T, 6, 6> {
       const MultibodyTree<symbolic::Expression>& tree_clone) const final;
 
  private:
-  typedef MobilizerImpl<T, 6, 6> MobilizerBase;
-  // Bring the handy number of position and velocities MobilizerImpl enums into
-  // this class' scope. This is useful when writing mathematical expressions
-  // with fixed-sized vectors since we can do things like Vector<T, kNq>.
-  // Operations with fixed-sized quantities can be optimized at compile time
-  // and therefore they are highly preferred compared to the very slow dynamic
-  // sized quantities.
-  using MobilizerBase::kNq;
-  using MobilizerBase::kNv;
-
   // Helper method to make a clone templated on ToScalar.
   template <typename ToScalar>
   std::unique_ptr<Mobilizer<ToScalar>> TemplatedDoCloneToScalar(
@@ -327,4 +366,4 @@ class RpyFloatingMobilizer final : public MobilizerImpl<T, 6, 6> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::internal::RpyFloatingMobilizer)
+    class ::drake::multibody::internal::RpyFloatingMobilizer);

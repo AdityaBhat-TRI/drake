@@ -35,10 +35,12 @@ class PlanarMobilizerTest : public MobilizerTester {
         std::make_unique<PlanarJoint<double>>(
             "joint0", tree().world_body().body_frame(), body_->body_frame(),
             Vector3d::Zero()));
+    mutable_mobilizer_ = const_cast<PlanarMobilizer<double>*>(mobilizer_);
   }
 
  protected:
   const PlanarMobilizer<double>* mobilizer_{nullptr};
+  PlanarMobilizer<double>* mutable_mobilizer_{nullptr};
 };
 
 TEST_F(PlanarMobilizerTest, CanRotateOrTranslate) {
@@ -58,19 +60,19 @@ TEST_F(PlanarMobilizerTest, StateAccess) {
   EXPECT_EQ(mobilizer_->get_translations(*context_), some_values1);
   mobilizer_->set_translations(context_.get(), some_values2);
   EXPECT_EQ(mobilizer_->get_translations(*context_), some_values2);
-  mobilizer_->set_angle(context_.get(), some_values3);
+  mobilizer_->SetAngle(context_.get(), some_values3);
   EXPECT_EQ(mobilizer_->get_angle(*context_), some_values3);
-  mobilizer_->set_angle(context_.get(), some_values4);
+  mobilizer_->SetAngle(context_.get(), some_values4);
   EXPECT_EQ(mobilizer_->get_angle(*context_), some_values4);
 
   // Verify we can set a planar mobilizer velocities given the model's context.
-  mobilizer_->set_translation_rates(context_.get(), some_values1);
+  mobilizer_->SetTranslationRates(context_.get(), some_values1);
   EXPECT_EQ(mobilizer_->get_translation_rates(*context_), some_values1);
-  mobilizer_->set_translation_rates(context_.get(), some_values2);
+  mobilizer_->SetTranslationRates(context_.get(), some_values2);
   EXPECT_EQ(mobilizer_->get_translation_rates(*context_), some_values2);
-  mobilizer_->set_angular_rate(context_.get(), some_values3);
+  mobilizer_->SetAngularRate(context_.get(), some_values3);
   EXPECT_EQ(mobilizer_->get_angular_rate(*context_), some_values3);
-  mobilizer_->set_angular_rate(context_.get(), some_values4);
+  mobilizer_->SetAngularRate(context_.get(), some_values4);
   EXPECT_EQ(mobilizer_->get_angular_rate(*context_), some_values4);
 }
 
@@ -81,9 +83,9 @@ TEST_F(PlanarMobilizerTest, ZeroState) {
   const double some_values4 = std::sqrt(5);
   // Set the state to some arbitrary non-zero value.
   mobilizer_->set_translations(context_.get(), some_values1);
-  mobilizer_->set_translation_rates(context_.get(), some_values2);
-  mobilizer_->set_angle(context_.get(), some_values3);
-  mobilizer_->set_angular_rate(context_.get(), some_values4);
+  mobilizer_->SetTranslationRates(context_.get(), some_values2);
+  mobilizer_->SetAngle(context_.get(), some_values3);
+  mobilizer_->SetAngularRate(context_.get(), some_values4);
   EXPECT_EQ(mobilizer_->get_translations(*context_), some_values1);
   EXPECT_EQ(mobilizer_->get_translation_rates(*context_), some_values2);
   EXPECT_EQ(mobilizer_->get_angle(*context_), some_values3);
@@ -91,7 +93,7 @@ TEST_F(PlanarMobilizerTest, ZeroState) {
 
   // Set the "zero state" for this mobilizer, which does happen to be that of
   // zero position and velocity.
-  mobilizer_->set_zero_state(*context_, &context_->get_mutable_state());
+  mobilizer_->SetZeroState(*context_, &context_->get_mutable_state());
   EXPECT_EQ(mobilizer_->get_translations(*context_), Vector2d::Zero());
   EXPECT_EQ(mobilizer_->get_translation_rates(*context_), Vector2d::Zero());
   EXPECT_EQ(mobilizer_->get_angle(*context_), 0.0);
@@ -99,14 +101,11 @@ TEST_F(PlanarMobilizerTest, ZeroState) {
 }
 
 TEST_F(PlanarMobilizerTest, DefaultPosition) {
-  PlanarMobilizer<double>* mutable_mobilizer =
-      &mutable_tree().get_mutable_variant(*mobilizer_);
-
   EXPECT_EQ(mobilizer_->get_translations(*context_), Vector2d::Zero());
   EXPECT_EQ(mobilizer_->get_angle(*context_), 0.0);
 
   Vector3d new_default(.4, .5, .6);
-  mutable_mobilizer->set_default_position(new_default);
+  mutable_mobilizer_->set_default_position(new_default);
   mobilizer_->set_default_state(*context_, &context_->get_mutable_state());
 
   EXPECT_EQ(mobilizer_->get_translations(*context_), new_default.head(2));
@@ -117,24 +116,21 @@ TEST_F(PlanarMobilizerTest, RandomState) {
   RandomGenerator generator;
   std::uniform_real_distribution<symbolic::Expression> uniform;
 
-  PlanarMobilizer<double>* mutable_mobilizer =
-      &mutable_tree().get_mutable_variant(*mobilizer_);
-
   // Default behavior is to set to zero.
-  mutable_mobilizer->set_random_state(*context_, &context_->get_mutable_state(),
-                                      &generator);
+  mutable_mobilizer_->set_random_state(
+      *context_, &context_->get_mutable_state(), &generator);
   EXPECT_EQ(mobilizer_->get_translations(*context_), Vector2d::Zero());
   EXPECT_EQ(mobilizer_->get_translation_rates(*context_), Vector2d::Zero());
   EXPECT_EQ(mobilizer_->get_angle(*context_), 0.0);
   EXPECT_EQ(mobilizer_->get_angular_rate(*context_), 0.0);
 
   // Set position to be random, but not velocity (yet).
-  mutable_mobilizer->set_random_position_distribution(
+  mutable_mobilizer_->set_random_position_distribution(
       Vector3<symbolic::Expression>(uniform(generator) + 1.0,
                                     uniform(generator) + 2.0,
                                     uniform(generator) + 3.0));
-  mutable_mobilizer->set_random_state(*context_, &context_->get_mutable_state(),
-                                      &generator);
+  mutable_mobilizer_->set_random_state(
+      *context_, &context_->get_mutable_state(), &generator);
   EXPECT_GE(mobilizer_->get_translations(*context_)[0], 1.0);
   EXPECT_LE(mobilizer_->get_translations(*context_)[0], 2.0);
   EXPECT_GE(mobilizer_->get_translations(*context_)[1], 2.0);
@@ -145,12 +141,12 @@ TEST_F(PlanarMobilizerTest, RandomState) {
   EXPECT_EQ(mobilizer_->get_angular_rate(*context_), 0.0);
 
   // Set the velocity distribution.  Now both should be random.
-  mutable_mobilizer->set_random_velocity_distribution(
+  mutable_mobilizer_->set_random_velocity_distribution(
       Vector3<symbolic::Expression>(uniform(generator) - 2.0,
                                     uniform(generator) - 3.0,
                                     uniform(generator) - 4.0));
-  mutable_mobilizer->set_random_state(*context_, &context_->get_mutable_state(),
-                                      &generator);
+  mutable_mobilizer_->set_random_state(
+      *context_, &context_->get_mutable_state(), &generator);
   EXPECT_GE(mobilizer_->get_translations(*context_)[0], 1.0);
   EXPECT_LE(mobilizer_->get_translations(*context_)[0], 2.0);
   EXPECT_GE(mobilizer_->get_translations(*context_)[1], 2.0);
@@ -170,8 +166,8 @@ TEST_F(PlanarMobilizerTest, RandomState) {
       mobilizer_->get_translation_rates(*context_);
   const double last_angle = mobilizer_->get_angle(*context_);
   const double last_angular_rates = mobilizer_->get_angular_rate(*context_);
-  mutable_mobilizer->set_random_state(*context_, &context_->get_mutable_state(),
-                                      &generator);
+  mutable_mobilizer_->set_random_state(
+      *context_, &context_->get_mutable_state(), &generator);
   EXPECT_NE(mobilizer_->get_translations(*context_), last_translations);
   EXPECT_NE(mobilizer_->get_translation_rates(*context_),
             last_translational_rates);
@@ -183,7 +179,7 @@ TEST_F(PlanarMobilizerTest, CalcAcrossMobilizerTransform) {
   const Vector2d translations(1, 0.5);
   const double angle = 1.5;
   mobilizer_->set_translations(context_.get(), translations);
-  mobilizer_->set_angle(context_.get(), angle);
+  mobilizer_->SetAngle(context_.get(), angle);
   const RigidTransformd X_FM(
       mobilizer_->CalcAcrossMobilizerTransform(*context_));
 
@@ -202,7 +198,7 @@ TEST_F(PlanarMobilizerTest, CalcAcrossMobilizerSpatialVeloctiy) {
   const double angle = 1.6;
   const Vector3d velocity(2.5, 2.1, 3.1);
   mobilizer_->set_translations(context_.get(), translations);
-  mobilizer_->set_angle(context_.get(), angle);
+  mobilizer_->SetAngle(context_.get(), angle);
   const SpatialVelocity<double> V_FM =
       mobilizer_->CalcAcrossMobilizerSpatialVelocity(*context_, velocity);
 
@@ -220,9 +216,9 @@ TEST_F(PlanarMobilizerTest, CalcAcrossMobilizerSpatialAcceleration) {
   const double angle_rate = 3;
   const Vector3d acceleration(3.5, 4, 4.5);
   mobilizer_->set_translations(context_.get(), translations);
-  mobilizer_->set_angle(context_.get(), angle);
-  mobilizer_->set_translation_rates(context_.get(), translation_rates);
-  mobilizer_->set_angular_rate(context_.get(), angle_rate);
+  mobilizer_->SetAngle(context_.get(), angle);
+  mobilizer_->SetTranslationRates(context_.get(), translation_rates);
+  mobilizer_->SetAngularRate(context_.get(), angle_rate);
 
   const SpatialAcceleration<double> A_FM =
       mobilizer_->CalcAcrossMobilizerSpatialAcceleration(*context_,
@@ -240,7 +236,7 @@ TEST_F(PlanarMobilizerTest, ProjectSpatialForce) {
   const Vector2d translations(1, 0.5);
   const double angle = 1.5;
   mobilizer_->set_translations(context_.get(), translations);
-  mobilizer_->set_angle(context_.get(), angle);
+  mobilizer_->SetAngle(context_.get(), angle);
 
   const Vector3d torque_Mo_F(1.0, 2.0, 3.0);
   const Vector3d force_Mo_F(1.0, 2.0, 3.0);
@@ -289,7 +285,7 @@ TEST_F(PlanarMobilizerTest, KinematicMapping) {
 TEST_F(PlanarMobilizerTest, MapUsesN) {
   // Set an arbitrary "non-zero" state.
   const Vector2d some_values(1.5, 2.5);
-  mobilizer_->set_angle(context_.get(), 3.5);
+  mobilizer_->SetAngle(context_.get(), 3.5);
   mobilizer_->set_translations(context_.get(), some_values);
 
   // Set arbitrary v and MapVelocityToQDot.
@@ -308,7 +304,7 @@ TEST_F(PlanarMobilizerTest, MapUsesN) {
 TEST_F(PlanarMobilizerTest, MapUsesNplus) {
   // Set an arbitrary "non-zero" state.
   const Vector2d some_values(1.5, 2.5);
-  mobilizer_->set_angle(context_.get(), 3.5);
+  mobilizer_->SetAngle(context_.get(), 3.5);
   mobilizer_->set_translations(context_.get(), some_values);
 
   // Set arbitrary qdot and MapQDotToVelocity.

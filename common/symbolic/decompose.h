@@ -4,7 +4,9 @@
 #include <tuple>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
+#include "drake/common/drake_deprecated.h"
 #include "drake/common/eigen_types.h"
 #include "drake/common/symbolic/expression.h"
 #include "drake/common/symbolic/polynomial.h"
@@ -43,7 +45,7 @@ void DecomposeAffineExpressions(
     const Eigen::Ref<const VectorX<Variable>>& vars,
     EigenPtr<Eigen::MatrixXd> M, EigenPtr<Eigen::VectorXd> v);
 
-/** Given an expression `e`, extract all variables inside `e`, append these
+/** Given an expression `e`, extracts all variables inside `e`, appends these
 variables to `vars` if they are not included in `vars` yet.
 
 @param[in] e  A symbolic expression.
@@ -53,10 +55,14 @@ included in `vars`, will be appended to the end of `vars`.
 @param[in,out] map_var_to_index. map_var_to_index is of the same size as
 `vars`, and map_var_to_index[vars(i).get_id()] = i. This invariance holds for
 map_var_to_index both as the input and as the output.
-@note This function is very slow if you call this function within a loop as it
-involves repeated heap memory allocation. Consider using
-ExtractVariablesFromExpression.
 */
+void ExtractAndAppendVariablesFromExpression(
+    const symbolic::Expression& e, std::vector<Variable>* vars,
+    std::unordered_map<symbolic::Variable::Id, int>* map_var_to_index);
+
+DRAKE_DEPRECATED("2024-05-01",
+                 "Use the overloaded function with std::vector<Variable> "
+                 "instead of VectorX<Variable>")
 void ExtractAndAppendVariablesFromExpression(
     const symbolic::Expression& e, VectorX<Variable>* vars,
     std::unordered_map<symbolic::Variable::Id, int>* map_var_to_index);
@@ -98,7 +104,10 @@ void DecomposeQuadraticPolynomial(
 @param[in] v A vector of affine expressions
 @param[out] A The matrix containing the linear coefficients.
 @param[out] b The vector containing all the constant terms.
-@param[out] vars All variables. */
+@param[out] vars All variables.
+
+@throws std::exception if the input expressions are not affine.
+*/
 void DecomposeAffineExpressions(
     const Eigen::Ref<const VectorX<symbolic::Expression>>& v,
     Eigen::MatrixXd* A, Eigen::VectorXd* b, VectorX<Variable>* vars);
@@ -128,7 +137,11 @@ that map_var_to_index[vi.get_ID()] = i.
 @param[out] coeffs A row vector. coeffs(i) = ci.
 @param[out] constant_term c0 in the equation above.
 @return num_variable. Number of variables in the expression. 2 * x(0) + 3 has 1
-variable, 2 * x(0) + 3 * x(1) - 2 * x(0) has 1 variable. */
+variable; 2 * x(0) + 3 * x(1) - 2 * x(0) has 1 variable, since the x(0) term
+cancels.
+
+@throws std::exception if the input expression is not affine.
+*/
 int DecomposeAffineExpression(
     const symbolic::Expression& e,
     const std::unordered_map<symbolic::Variable::Id, int>& map_var_to_index,
@@ -155,5 +168,30 @@ std::tuple<MatrixX<Expression>, VectorX<Expression>, VectorX<Expression>>
 DecomposeLumpedParameters(
     const Eigen::Ref<const VectorX<Expression>>& f,
     const Eigen::Ref<const VectorX<Variable>>& parameters);
+
+/** Decomposes an L2 norm @p e = |Ax+b|₂ into A, b, and the variable vector x
+(or returns false if the decomposition is not possible).
+
+In order for the decomposition to succeed, the following conditions must be met:
+1. e is a sqrt expression.
+2. e.get_argument() is a polynomial of degree 2, which can be expressed as a
+   quadratic form (Ax+b)ᵀ(Ax+b).
+
+@param e The symbolic affine expression
+@param psd_tol The tolerance for checking positive semidefiniteness.
+Eigenvalues less that this threshold are considered to be zero. Matrices with
+negative eigenvalues less than this threshold are considered to be not positive
+semidefinite, and will cause the decomposition to fail.
+@param coefficient_tol The absolute tolerance for checking that the
+coefficients of the expression inside the sqrt match the coefficients of
+|Ax+b|₂².
+
+@return [is_l2norm, A, b, vars] where is_l2norm is true iff the decomposition
+was successful, and if is_l2norm is true then |A*vars + b|₂ = e.
+*/
+std::tuple<bool, Eigen::MatrixXd, Eigen::VectorXd, VectorX<Variable>>
+DecomposeL2NormExpression(const symbolic::Expression& e, double psd_tol = 1e-8,
+                          double coefficient_tol = 1e-8);
+
 }  // namespace symbolic
 }  // namespace drake

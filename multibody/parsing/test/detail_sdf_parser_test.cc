@@ -105,7 +105,8 @@ class SdfParserTest : public test::DiagnosticPolicyTestBase{
     std::optional<ModelInstanceIndex> result =
         AddModelFromSdf(data_source, model_name, parent_model_name, w);
     EXPECT_TRUE(result.has_value());
-    resolver.Resolve(diagnostic_policy_);
+    last_parsed_groups_ = ConvertInstancedNamesToStrings(
+        resolver.Resolve(diagnostic_policy_), plant_);
     return result.value_or(ModelInstanceIndex{});
   }
 
@@ -117,7 +118,8 @@ class SdfParserTest : public test::DiagnosticPolicyTestBase{
     ParsingWorkspace w{options_, package_map_, diagnostic_policy_,
                        &plant_, &resolver, TestingSelect};
     auto result = AddModelsFromSdf(data_source, parent_model_name, w);
-    resolver.Resolve(diagnostic_policy_);
+    last_parsed_groups_ = ConvertInstancedNamesToStrings(
+        resolver.Resolve(diagnostic_policy_), plant_);
     return result;
   }
 
@@ -129,7 +131,8 @@ class SdfParserTest : public test::DiagnosticPolicyTestBase{
     ParsingWorkspace w{options_, package_map_, diagnostic_policy_,
                        &plant_, &resolver, TestingSelect};
     auto result = AddModelsFromSdf(data_source, parent_model_name, w);
-    resolver.Resolve(diagnostic_policy_);
+    last_parsed_groups_ = ConvertInstancedNamesToStrings(
+        resolver.Resolve(diagnostic_policy_), plant_);
     return result;
   }
 
@@ -172,6 +175,7 @@ class SdfParserTest : public test::DiagnosticPolicyTestBase{
   DiagnosticPolicy diagnostic_;
   MultibodyPlant<double> plant_{0.01};
   SceneGraph<double> scene_graph_;
+  CollisionFilterGroupsImpl<std::string> last_parsed_groups_;
 };
 
 const Frame<double>& GetModelFrameByName(const MultibodyPlant<double>& plant,
@@ -3155,6 +3159,14 @@ TEST_F(SdfParserTest, InterfaceApi) {
       {"top::gripper::gripper_link", "top::torso"},
     };
     VerifyCollisionFilters(ids, expected_filters);
+
+    // Verify parser-level collision filter reporting.
+    CollisionFilterGroupsImpl<std::string> expected_report;
+    expected_report.AddGroup(
+        "top::g1",
+        {"top::arm::L1", "top::gripper::gripper_link", "top::torso"});
+    expected_report.AddExclusionPair({"top::g1", "top::g1"});
+    EXPECT_EQ(last_parsed_groups_, expected_report);
   }
 
   plant_.Finalize();
@@ -3272,6 +3284,64 @@ TEST_F(SdfParserTest, CollisionFilterGroupParsingTest) {
     {"test::robot1::link2_sphere", "test::robot2::link3_sphere"},
   };
   VerifyCollisionFilters(ids, expected_filters);
+
+  // Verify parser-level collision filter reporting.
+  CollisionFilterGroupsImpl<std::string> expected_report;
+  expected_report.AddGroup("test::group_3s", {"test::robot1::link3"});
+  expected_report.AddGroup("test::group_6s",
+                           {"test::robot1::link6", "test::robot2::link6"});
+  expected_report.AddGroup("test::group_of_groups",
+                           {"test::robot1::link2", "test::robot2::link3"});
+
+  expected_report.AddGroup("test::robot1::group_link14",
+                           {"test::robot1::link1", "test::robot1::link4"});
+  expected_report.AddGroup("test::robot1::group_link2",
+                           {"test::robot1::link2"});
+  expected_report.AddGroup("test::robot1::group_link3",
+                           {"test::robot1::link3"});
+  expected_report.AddGroup("test::robot1::group_link56",
+                           {"test::robot1::link5", "test::robot1::link6"});
+
+  expected_report.AddGroup("test::robot2::group_link14",
+                           {"test::robot2::link1", "test::robot2::link4"});
+  expected_report.AddGroup("test::robot2::group_link2",
+                           {"test::robot2::link2"});
+  expected_report.AddGroup("test::robot2::group_link3",
+                           {"test::robot2::link3"});
+  expected_report.AddGroup("test::robot2::group_link56",
+                           {"test::robot2::link5", "test::robot2::link6"});
+
+  expected_report.AddExclusionPair(
+      {"test::group_3s", "test::robot2::group_link3"});
+  expected_report.AddExclusionPair({"test::group_6s", "test::group_6s"});
+  expected_report.AddExclusionPair(
+      {"test::group_of_groups", "test::group_of_groups"});
+  expected_report.AddExclusionPair(
+      {"test::robot1::group_link14", "test::robot1::group_link14"});
+  expected_report.AddExclusionPair(
+      {"test::robot1::group_link14", "test::robot1::group_link3"});
+  expected_report.AddExclusionPair(
+      {"test::robot1::group_link2", "test::robot1::group_link3"});
+  expected_report.AddExclusionPair(
+      {"test::robot1::group_link2", "test::robot1::group_link56"});
+  expected_report.AddExclusionPair(
+      {"test::robot1::group_link3", "test::robot1::group_link56"});
+  expected_report.AddExclusionPair(
+      {"test::robot1::group_link56", "test::robot1::group_link56"});
+  expected_report.AddExclusionPair(
+      {"test::robot2::group_link14", "test::robot2::group_link14"});
+  expected_report.AddExclusionPair(
+      {"test::robot2::group_link14", "test::robot2::group_link3"});
+  expected_report.AddExclusionPair(
+      {"test::robot2::group_link2", "test::robot2::group_link3"});
+  expected_report.AddExclusionPair(
+      {"test::robot2::group_link2", "test::robot2::group_link56"});
+  expected_report.AddExclusionPair(
+      {"test::robot2::group_link3", "test::robot2::group_link56"});
+  expected_report.AddExclusionPair(
+      {"test::robot2::group_link56", "test::robot2::group_link56"});
+
+  EXPECT_EQ(last_parsed_groups_, expected_report);
 
   // Make sure we can add the model a second time.
   AddModelFromSdfFile(full_sdf_filename, "model2");
@@ -3802,6 +3872,109 @@ TEST_F(SdfParserTest, MergeIncludeIntoWorld) {
   TestMergeIncludeWithInterfaceApi(plant_, scene_graph_, "top");
   TestMergeIncludeWithInterfaceApi(plant_, scene_graph_, "another_top");
 }
+
+TEST_F(SdfParserTest, VisualRoleConfiguration) {
+  AddSceneGraph();
+  // Test that point masses don't get sent through the massless body branch.
+  ParseTestString(R"""(
+  <model name="visual_model">
+    <link name="unused_default_geometry">
+      <visual name="general_visual">
+        <pose>-1 0 0 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>1 1 1</size>
+          </box>
+        </geometry>
+        <!-- Both roles disabled for <visual> generates a warning. -->
+        <drake:perception_properties enabled="false"/>
+        <drake:illustration_properties enabled="false"/>
+      </visual>
+
+      <drake:visual name="non-existent">
+        <drake:geometry>
+          <drake:sphere>
+            <drake:radius>10</drake:radius>
+          </drake:sphere>
+        </drake:geometry>
+        <!-- Both roles diabled for <drake:visual> does *not* generate a
+             warning. -->
+        <drake:perception_properties enabled="false"/>
+        <drake:illustration_properties enabled="false"/>
+      </drake:visual>
+
+      <drake:visual name="illustration">
+        <drake:pose>1 0 0 0 0 0</drake:pose>
+        <drake:geometry>
+          <drake:cylinder>
+            <drake:radius>0.8</drake:radius>
+            <drake:length>0.02</drake:length>
+          </drake:cylinder>
+        </drake:geometry>
+        <!-- perception disabled; illustration only. -->
+        <drake:perception_properties enabled="false"/>
+      </drake:visual>
+
+      <drake:visual name="perception">
+        <drake:pose>0 0 0 0 0 0</drake:pose>
+        <drake:geometry>
+          <drake:sphere>
+            <drake:radius>2</drake:radius>
+          </drake:sphere>
+        </drake:geometry>
+        <!-- illustration disabled; perception only. -->
+        <drake:illustration_properties enabled="false"/>
+      </drake:visual>
+
+      <drake:visual name="bad_nesting">
+        <!-- Non drake: child element should emit diagnostic error. -->
+        <pose>0 0 0 0 0 0</pose>
+      </drake:visual>
+
+    </link>
+  </model>)""");
+
+  struct ExpectedGeometry {
+    std::string name;
+    std::string shape_string;
+    bool operator<(const ExpectedGeometry& other) const {
+      if (name < other.name) return true;
+      if (name > other.name) return false;
+      return shape_string < other.shape_string;
+    }
+  };
+
+  const std::set<ExpectedGeometry> expected_geometries{
+      {"visual_model::illustration", "Cylinder(radius=0.8, length=0.02)"},
+      {"visual_model::perception", "Sphere(radius=2)"}};
+
+  const auto& inspector = scene_graph_.model_inspector();
+  EXPECT_EQ(inspector.num_geometries(), expected_geometries.size());
+  for (const auto id : inspector.GetAllGeometryIds()) {
+    EXPECT_TRUE(expected_geometries.contains(ExpectedGeometry{
+        inspector.GetName(id), inspector.GetShape(id).to_string()}));
+  }
+
+  EXPECT_THAT(TakeWarning(),
+              ::testing::HasSubstr("<visual name=\"general_visual\"> tag had "
+                                   "all visual roles turned off"));
+
+  EXPECT_THAT(TakeError(),
+              ::testing::HasSubstr("under a drake-namespaced tag must likewise "
+                                   "be drake-namespaced"));
+
+  // Note: we haven't done anything explicit to test the <drake:pose>
+  // conversion. Given that the other elements of the <drake:visualizer> tree
+  // have processed, we assume the <drake:pose> has processed as well. The only
+  // concern we'd have if the "relative-to" plumbing weren't set up correctly.
+  // However, in that case, this test would fail because each of the
+  // <drake:visual> elements with a <drake:pose> tag would generate an error
+  // in the diagnostics:
+  //    "SemanticPose has invalid pointer to PoseRelativeToGraph."
+  // If those errors were emitted, this test would fail on completion.
+  EXPECT_THAT(NumErrors(), 0);
+}
+
 }  // namespace
 }  // namespace internal
 }  // namespace multibody

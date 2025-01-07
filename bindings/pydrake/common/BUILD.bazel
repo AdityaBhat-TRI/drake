@@ -1,8 +1,15 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 load("//tools/install:install.bzl", "install")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
+)
+load(
+    "//tools/skylark:drake_py.bzl",
+    "drake_py_binary",
+    "drake_py_library",
+    "drake_py_unittest",
 )
 load(
     "//tools/skylark:pybind.bzl",
@@ -13,16 +20,9 @@ load(
     "get_pybind_package_info",
 )
 load(
-    "//tools/skylark:drake_py.bzl",
-    "drake_py_binary",
-    "drake_py_library",
-    "drake_py_unittest",
-)
-load(
     "//tools/workspace/pybind11:repository.bzl",
     "generate_pybind11_version_py_file",
 )
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 
 package(default_visibility = ["//visibility:private"])
 
@@ -52,7 +52,6 @@ drake_pybind_library(
     cc_deps = [
         ":cpp_template_pybind",
         ":default_scalars_pybind",
-        ":eigen_geometry_pybind",
         ":eigen_pybind",
         ":serialize_pybind",
         ":type_pack",
@@ -175,18 +174,6 @@ drake_cc_library(
 )
 
 drake_cc_library(
-    name = "eigen_geometry_pybind",
-    hdrs = ["eigen_geometry_pybind.h"],
-    declare_installed_headers = False,
-    visibility = ["//visibility:public"],
-    deps = [
-        ":wrap_pybind",
-        "//:drake_shared_library",
-        "//bindings/pydrake:pydrake_pybind",
-    ],
-)
-
-drake_cc_library(
     name = "eigen_pybind",
     hdrs = ["eigen_pybind.h"],
     declare_installed_headers = False,
@@ -244,6 +231,20 @@ drake_cc_library(
         ":value_pybind",
         "//:drake_shared_library",
         "//bindings/pydrake:documentation_pybind",
+    ],
+)
+
+drake_cc_library(
+    name = "ref_cycle_pybind",
+    srcs = ["ref_cycle_pybind.cc"],
+    hdrs = ["ref_cycle_pybind.h"],
+    declare_installed_headers = 0,
+    visibility = ["//visibility:public"],
+    deps = [
+        "//bindings/pydrake:pydrake_pybind",
+        "//common:essential",
+        "@fmt",
+        "@pybind11",
     ],
 )
 
@@ -375,7 +376,6 @@ drake_pybind_library(
     name = "eigen_geometry_test_util_py",
     testonly = True,
     add_install = False,
-    cc_deps = [":eigen_geometry_pybind"],
     cc_so_name = "test/eigen_geometry_test_util",
     cc_srcs = ["test/eigen_geometry_test_util_py.cc"],
     package_info = PACKAGE_INFO,
@@ -488,6 +488,7 @@ drake_py_unittest(
     num_threads = 2,
     deps = [
         ":common",
+        "//bindings/pydrake/common/test_utilities",
     ],
 )
 
@@ -502,6 +503,24 @@ drake_py_unittest(
     name = "pybind11_version_test",
     deps = [
         ":common",
+    ],
+)
+
+drake_pybind_library(
+    name = "ref_cycle_test_util_py",
+    testonly = True,
+    add_install = False,
+    cc_deps = [":ref_cycle_pybind"],
+    cc_srcs = ["test/ref_cycle_test_util_py.cc"],
+    package_info = PACKAGE_INFO,
+)
+
+drake_py_unittest(
+    name = "ref_cycle_test",
+    deps = [
+        ":common",
+        ":ref_cycle_test_util_py",
+        "//bindings/pydrake/common/test_utilities",
     ],
 )
 
@@ -723,6 +742,7 @@ drake_py_unittest(
     deps = [
         ":common",
         ":serialize_test_util_py",
+        "//bindings/pydrake/common/test_utilities:deprecation_py",
         "//bindings/pydrake/common/test_utilities:meta_py",
     ],
 )

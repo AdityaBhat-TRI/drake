@@ -1,12 +1,17 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 load("//tools/install:install.bzl", "install")
 load(
-    "//tools/skylark:test_tags.bzl",
-    "gurobi_test_tags",
-    "mosek_test_tags",
+    "//tools/skylark:alias.bzl",
+    "drake_py_library_aliases",
 )
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_library",
+)
+load(
+    "//tools/skylark:drake_py.bzl",
+    "drake_py_library",
+    "drake_py_unittest",
 )
 load(
     "//tools/skylark:pybind.bzl",
@@ -15,15 +20,10 @@ load(
     "get_pybind_package_info",
 )
 load(
-    "//tools/skylark:drake_py.bzl",
-    "drake_py_library",
-    "drake_py_unittest",
+    "//tools/skylark:test_tags.bzl",
+    "gurobi_test_tags",
+    "mosek_test_tags",
 )
-load(
-    "//tools/skylark:alias.bzl",
-    "drake_py_library_aliases",
-)
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 
 package(default_visibility = [
     "//bindings/pydrake:__subpackages__",
@@ -67,10 +67,12 @@ drake_pybind_library(
         "solvers_py_mobylcp.cc",
         "solvers_py_mosek.cc",
         "solvers_py_nlopt.cc",
+        "solvers_py_options.cc",
         "solvers_py_osqp.cc",
         "solvers_py_scs.cc",
         "solvers_py_sdpa_free_format.cc",
         "solvers_py_semidefinite_relaxation.cc",
+        "solvers_py_program_attribute.cc",
         "solvers_py_snopt.cc",
         "solvers_py_unrevised_lemke.cc",
     ],
@@ -101,8 +103,8 @@ drake_py_unittest(
 drake_py_unittest(
     name = "clarabel_solver_test",
     args = select({
-        "//tools:no_clarabel": ["TestClarabelSolver.unavailable"],
-        "//conditions:default": [],
+        "//tools/workspace/clarabel_cpp_internal:enabled": [],
+        "//conditions:default": ["TestClarabelSolver.unavailable"],
     }),
     deps = [
         ":solvers",
@@ -113,8 +115,8 @@ drake_py_unittest(
 drake_py_unittest(
     name = "clp_solver_test",
     args = select({
-        "//tools:no_clp": ["TestClpSolver.unavailable"],
-        "//conditions:default": [],
+        "//tools/workspace/clp_internal:enabled": [],
+        "//conditions:default": ["TestClpSolver.unavailable"],
     }),
     deps = [
         ":solvers",
@@ -125,8 +127,8 @@ drake_py_unittest(
 drake_py_unittest(
     name = "csdp_solver_test",
     args = select({
-        "//tools:no_csdp": ["TestCsdptSolver.unavailable"],
-        "//conditions:default": [],
+        "//tools/workspace/csdp_internal:enabled": [],
+        "//conditions:default": ["TestCsdptSolver.unavailable"],
     }),
     deps = [
         ":solvers",
@@ -146,8 +148,8 @@ drake_py_unittest(
 drake_py_unittest(
     name = "ipopt_solver_test",
     args = select({
-        "//tools:no_ipopt": ["TestIpoptSolver.unavailable"],
-        "//conditions:default": [],
+        "//tools/workspace/ipopt_internal:enabled": [],
+        "//conditions:default": ["TestIpoptSolver.unavailable"],
     }),
     deps = [
         ":solvers",
@@ -182,8 +184,8 @@ drake_py_unittest(
 drake_py_unittest(
     name = "nlopt_solver_test",
     args = select({
-        "//tools:no_nlopt": ["TestNloptSolver.unavailable"],
-        "//conditions:default": [],
+        "//tools/workspace/nlopt_internal:enabled": [],
+        "//conditions:default": ["TestNloptSolver.unavailable"],
     }),
     deps = [
         ":solvers",
@@ -194,8 +196,8 @@ drake_py_unittest(
 drake_py_unittest(
     name = "osqp_solver_test",
     args = select({
-        "//tools:no_osqp": ["TestOsqpSolver.unavailable"],
-        "//conditions:default": [],
+        "//tools/workspace/osqp_internal:enabled": [],
+        "//conditions:default": ["TestOsqpSolver.unavailable"],
     }),
     deps = [
         ":solvers",
@@ -205,8 +207,8 @@ drake_py_unittest(
 drake_py_unittest(
     name = "scs_solver_test",
     args = select({
-        "//tools:no_scs": ["TestScsSolver.unavailable"],
-        "//conditions:default": [],
+        "//tools/workspace/scs_internal:enabled": [],
+        "//conditions:default": ["TestScsSolver.unavailable"],
     }),
     deps = [
         ":solvers",
@@ -285,6 +287,14 @@ drake_py_unittest(
 
 drake_py_unittest(
     name = "semidefinite_relaxation_test",
+    deps = [
+        ":solvers",
+        "//bindings/pydrake/common/test_utilities",
+    ],
+)
+
+drake_py_unittest(
+    name = "program_attribute_test",
     deps = [
         ":solvers",
         "//bindings/pydrake/common/test_utilities",

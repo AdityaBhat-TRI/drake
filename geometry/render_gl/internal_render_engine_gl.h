@@ -138,17 +138,19 @@ class RenderEngineGl final : public render::RenderEngine, private ShapeReifier {
     const GeometryId id;
     const math::RigidTransformd& X_WG;
     const PerceptionProperties& properties;
+    const Rgba& default_diffuse;
     bool accepted{true};
   };
 
-  // Adds the mesh data associated with the given filename to geometries_.
+  // Adds the mesh data associated with the given source to geometries_.
   // Before adding it outright, it resolves the material heuristic. If the
   // mesh data has no intrinsic material, then considers the geometry properties
   // or existence of an identically named png file.
   //
-  // @pre GetMeshes() has already been invoked on `filename`.
-  void ImplementMeshesForFile(void* user_data, const Vector3<double>& scale,
-                              const std::string& filename);
+  // @pre The file key derived from the combination of `mesh_source` and
+  // `is_convex` is in the meshes_ cache.
+  void ImplementMeshesForSource(void* user_data, const Vector3<double>& scale,
+                                const MeshSource& mesh_source, bool is_convex);
 
   // @see RenderEngine::DoRegisterVisual().
   bool DoRegisterVisual(GeometryId id, const Shape& shape,
@@ -208,6 +210,11 @@ class RenderEngineGl final : public render::RenderEngine, private ShapeReifier {
   //
   // @param geometry_index   The index into geometries_ of the geometry used by
   //                         this instance.
+  // @param user_data        The type-erased RegistrationData pointer containing
+  //                         the data used during reification.
+  // @param scale            The quantity for scaling the geometry *model* data
+  //                         to the Drake geometry frame G. Used to construct
+  //                         S_GM.
   void AddGeometryInstance(int geometry_index, void* user_data,
                            const Vector3<double>& scale);
 
@@ -227,12 +234,26 @@ class RenderEngineGl final : public render::RenderEngine, private ShapeReifier {
   int GetCylinder();
   int GetHalfSpace();
   int GetBox();
-  // For the given mesh filename, returns the indices of the OpenGlGeometries
-  // defined in the file.
-  // If the filename represents an unsupported file type, no geometry is added,
-  // data->accepted is set to false, and the returned vector is empty.
-  std::vector<int> GetMeshes(const std::string& filename,
-                             RegistrationData* data);
+
+  // For the given convex shape, caches a render mesh based on its convex hull
+  // in the geometry cache.
+  //
+  // What gets cached is the unscaled convex hull of the file. The scale factor
+  // gets applied when the mesh is instantiated (i.e., OpenGlInstance).
+  //
+  // @throws if `convex.GetConvexHull()` throws (e.g., no one else has asked for
+  // the hull yet, and it references an unsupported file type or the file data
+  // is degenerate).
+  void CacheConvexHullMesh(const Convex& convex, const RegistrationData& data);
+
+  // For the given mesh source, parses the mesh data and attempts to place the
+  // resulting render meshes in the geometry cache (i.e., a set of RenderMesh
+  // instances are associated with the filename-derived key in `meshes_`).
+  //
+  // If the source indicates an unsupported file type, no geometry is cached,
+  // and data->accepted is set to false.
+  void CacheFileMeshesMaybe(const MeshSource& mesh_source,
+                            RegistrationData* data);
 
   // Given the render type, returns the texture configuration for that render
   // type. These are the key arguments for glTexImage2D based on the render
@@ -271,10 +292,6 @@ class RenderEngineGl final : public render::RenderEngine, private ShapeReifier {
   // This function is *not* threadsafe.
   int CreateGlGeometry(const geometry::internal::RenderMesh& mesh_data,
                        bool is_deformable = false);
-
-  // Given a geometry that has its buffers (and vertex counts assigned), ties
-  // all of the buffer data into the vertex array attributes.
-  void CreateVertexArray(OpenGlGeometry* geometry) const;
 
   // Updates the vertex arrays in all of the OpenGlGeometry instances owned by
   // this render engine.
@@ -382,7 +399,7 @@ class RenderEngineGl final : public render::RenderEngine, private ShapeReifier {
   // and allowed deviation within a small tolerance, then we could reuse them.
 
   // TODO(SeanCurtis-TRI): The relationships between OpenGlInstance,
-  // OpenGlGeometry, RenderGlMesh, Part, and Prop are probably overly opaque.
+  // OpenGlGeometry, RenderGlMesh, and Prop are probably overly opaque.
   // I need a succinct summary of how all of these moving pieces work together
   // with clear delineation of roles.
 
@@ -398,6 +415,10 @@ class RenderEngineGl final : public render::RenderEngine, private ShapeReifier {
     std::optional<geometry::internal::RenderMaterial> mesh_material{
         std::nullopt};
   };
+
+  // Forward declaration of the class that processes glTF files. We declare it
+  // here so that it has access to private types (e.g., RenderGlMesh).
+  class GltfMeshExtractor;
 
   // Mapping from the obj's canonical filename to RenderGlMeshes.
   std::unordered_map<std::string, std::vector<RenderGlMesh>> meshes_;
@@ -426,31 +447,14 @@ class RenderEngineGl final : public render::RenderEngine, private ShapeReifier {
                      RenderType::kTypeCount>
       frame_buffers_;
 
-  // A geometry is modeled with one or more "parts". A part consists of an
-  // instance N and its optional pose in the geometry frame G: T_GN. If the
-  // pose is not provided, then T_GN = I. Posing the instance using the
-  // geometry's world pose X_WG is simply: T_WN = X_WG * T_GN.
-  // For primitives and meshes from file types like obj, T_GN will always be
-  // nullopt. In those representations, the definition of the geometry is
-  // uniquely given in the geometry frame. But for other file types (e.g., glTF)
-  // geometry instances can be defined with arbitrary internal transforms. So,
-  // in those cases T_GN will contain the transform between the mesh definition
-  // and its instantiation within the file (and, therefore, in the geometry
-  // frame).
-  struct Part {
-    OpenGlInstance instance;
-    // TODO(SeanCurtis-TRI): When we get to glTF support, this will have to
-    // become Matrix4 along with the value in OpenGlInstance.
-    std::optional<math::RigidTransformd> T_GN;
-  };
-
-  // Some geometries are represented by multiple parts (such as when importing
-  // a complex .obj file). A "prop" is the collection of parts which constitute
+  // Each OpenGlInstance is associated with a single material. Some visuals
+  // may be comprised of multiple instances (such as might come from an Obj or
+  // glTF file). A "prop" is the collection of instances which constitute
   // one visual geometry associated with a GeometryId.
   //
-  // For simple Drake primitives, there will be a single "part".
+  // For simple Drake primitives, the prop consists of a single instance.
   struct Prop {
-    std::vector<Part> parts;
+    std::vector<OpenGlInstance> instances;
   };
 
   // Mapping from GeometryId to the visual data associated with that geometry.

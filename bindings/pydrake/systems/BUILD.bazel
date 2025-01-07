@@ -1,10 +1,6 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 load("//tools/install:install.bzl", "install")
-load(
-    "//tools/skylark:pybind.bzl",
-    "drake_pybind_library",
-    "get_drake_py_installs",
-    "get_pybind_package_info",
-)
+load("//tools/jupyter:jupyter_py.bzl", "drake_jupyter_py_binary")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_library",
@@ -15,8 +11,12 @@ load(
     "drake_py_library",
     "drake_py_unittest",
 )
-load("//tools/jupyter:jupyter_py.bzl", "drake_jupyter_py_binary")
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
+load(
+    "//tools/skylark:pybind.bzl",
+    "drake_pybind_library",
+    "get_drake_py_installs",
+    "get_pybind_package_info",
+)
 load("//tools/skylark:test_tags.bzl", "vtk_test_tags")
 
 package(default_visibility = [
@@ -48,9 +48,11 @@ drake_pybind_library(
         "//bindings/pydrake/common:default_scalars_pybind",
         "//bindings/pydrake/common:deprecation_pybind",
         "//bindings/pydrake/common:eigen_pybind",
+        "//bindings/pydrake/common:ref_cycle_pybind",
         "//bindings/pydrake/common:type_safe_index_pybind",
         "//bindings/pydrake/common:value_pybind",
         "//bindings/pydrake/common:wrap_pybind",
+        "//bindings/pydrake/systems:builder_life_support_pybind",
     ],
     cc_srcs = [
         "framework_py.cc",
@@ -88,6 +90,7 @@ drake_pybind_library(
     py_deps = [
         ":framework_py",
         ":module_py",
+        "//bindings/pydrake:trajectories_py",
     ],
 )
 
@@ -107,6 +110,7 @@ drake_pybind_library(
     py_deps = [
         ":framework_py",
         ":module_py",
+        "//bindings/pydrake:trajectories_py",
         "//bindings/pydrake/solvers",
     ],
 )
@@ -117,11 +121,13 @@ drake_pybind_library(
         "//bindings/pydrake:documentation_pybind",
         "//bindings/pydrake:symbolic_types_pybind",
         "//bindings/pydrake/common:deprecation_pybind",
+        "//bindings/pydrake/common:ref_cycle_pybind",
         "//bindings/pydrake/common:wrap_pybind",
     ],
     cc_srcs = ["controllers_py.cc"],
     package_info = PACKAGE_INFO,
     py_deps = [
+        ":analysis_py",
         ":framework_py",
         ":module_py",
         ":primitives_py",
@@ -130,11 +136,25 @@ drake_pybind_library(
 )
 
 drake_pybind_library(
+    name = "estimators_py",
+    cc_deps = [
+        "//bindings/pydrake:documentation_pybind",
+        "//bindings/pydrake/common:wrap_pybind",
+    ],
+    cc_srcs = ["estimators_py.cc"],
+    package_info = PACKAGE_INFO,
+    py_deps = [
+        ":framework_py",
+        ":module_py",
+        ":primitives_py",
+    ],
+)
+
+drake_pybind_library(
     name = "rendering_py",
     cc_deps = [
         "//bindings/pydrake:documentation_pybind",
         "//bindings/pydrake/common:deprecation_pybind",
-        "//bindings/pydrake/common:eigen_geometry_pybind",
         "//bindings/pydrake/common:value_pybind",
     ],
     cc_srcs = ["rendering_py.cc"],
@@ -150,9 +170,9 @@ drake_pybind_library(
     cc_deps = [
         "//bindings/pydrake:documentation_pybind",
         "//bindings/pydrake/common:cpp_template_pybind",
-        "//bindings/pydrake/common:deprecation_pybind",
-        "//bindings/pydrake/common:eigen_geometry_pybind",
+        "//bindings/pydrake/common:default_scalars_pybind",
         "//bindings/pydrake/common:eigen_pybind",
+        "//bindings/pydrake/common:ref_cycle_pybind",
         "//bindings/pydrake/common:serialize_pybind",
         "//bindings/pydrake/common:type_pack",
         "//bindings/pydrake/common:value_pybind",
@@ -165,6 +185,7 @@ drake_pybind_library(
         "sensors_py_image_io.cc",
         "sensors_py_lcm.cc",
         "sensors_py_rgbd.cc",
+        "sensors_py_rotary_encoders.cc",
     ],
     package_info = PACKAGE_INFO,
     py_deps = [
@@ -181,6 +202,14 @@ drake_py_library(
     srcs = ["drawing.py"],
     imports = PACKAGE_INFO.py_imports,
     deps = [":module_py"],
+)
+
+drake_cc_library(
+    name = "builder_life_support_pybind",
+    hdrs = ["builder_life_support_pybind.h"],
+    declare_installed_headers = False,
+    visibility = ["//bindings/pydrake:__subpackages__"],
+    deps = [],
 )
 
 drake_cc_library(
@@ -210,7 +239,6 @@ drake_pybind_library(
         ":framework_py",
         ":module_py",
         "//bindings/pydrake:lcm_py",
-        "//lcmtypes:lcmtypes_drake_py",
     ],
     py_srcs = ["_lcm_extra.py"],
 )
@@ -257,7 +285,7 @@ drake_py_library(
         ":pyplot_visualizer_py",
         ":rendering_py",
         "//bindings/pydrake:lcm_py",
-        "@bazel_tools//tools/python/runfiles",
+        "@rules_python//python/runfiles",
     ],
 )
 
@@ -283,6 +311,7 @@ drake_py_library(
 PY_LIBRARIES_WITH_INSTALL = [
     ":analysis_py",
     ":controllers_py",
+    ":estimators_py",
     ":framework_py",
     ":lcm_py",
     ":primitives_py",
@@ -337,7 +366,7 @@ drake_py_binary(
     srcs = ["drawing_graphviz_example.py"],
     add_test_rule = 1,
     data = [
-        "//examples/multibody/cart_pole:cart_pole.sdf",
+        "//examples/multibody/cart_pole:models",
     ],
     test_rule_timeout = "moderate",
     deps = [
@@ -355,7 +384,7 @@ drake_jupyter_py_binary(
     name = "jupyter_widgets_examples",
     add_test_rule = 1,
     data = [
-        "//manipulation/models/ycb:models",
+        "@drake_models//:ycb",
     ],
     deps = [
         ":analysis_py",
@@ -373,7 +402,10 @@ drake_pybind_library(
     add_install = False,
     cc_deps = [
         "//bindings/pydrake:documentation_pybind",
+        "//bindings/pydrake/common:cpp_template_pybind",
+        "//bindings/pydrake/common:default_scalars_pybind",
         "//bindings/pydrake/common:value_pybind",
+        "//bindings/pydrake/systems:builder_life_support_pybind",
     ],
     cc_so_name = "test/test_util",
     cc_srcs = ["test/test_util_py.cc"],
@@ -382,7 +414,7 @@ drake_pybind_library(
         ":framework_py",
         ":primitives_py",
     ],
-    visibility = ["//visibility:private"],
+    visibility = ["//bindings/pydrake:__subpackages__"],
 )
 
 drake_py_unittest(
@@ -392,6 +424,18 @@ drake_py_unittest(
         ":framework_py",
         ":primitives_py",
         "//bindings/pydrake:trajectories_py",
+        "//bindings/pydrake/common/test_utilities",
+    ],
+)
+
+drake_py_unittest(
+    name = "builder_life_support_test",
+    # Somehow kcov and pybind11 objects interact to spoil reference counting
+    # heuristics. In any case, kcov can't really introspect mixed-language
+    # programs.
+    tags = ["no_kcov"],
+    deps = [
+        ":test_util_py",
         "//bindings/pydrake/common/test_utilities",
     ],
 )
@@ -438,14 +482,25 @@ drake_py_unittest(
 drake_py_unittest(
     name = "controllers_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":controllers_py",
+        ":test_util_py",
+        "//bindings/pydrake/common/test_utilities:deprecation_py",
         "//bindings/pydrake/examples",
         "//bindings/pydrake/multibody:parsing_py",
         "//bindings/pydrake/multibody:plant_py",
         "//bindings/pydrake/multibody:tree_py",
+    ],
+)
+
+drake_py_unittest(
+    name = "estimators_test",
+    deps = [
+        ":estimators_py",
+        ":primitives_py",
+        "//bindings/pydrake/examples",
     ],
 )
 
@@ -468,6 +523,7 @@ drake_py_unittest(
         ":test_util_py",
         "//bindings/pydrake:trajectories_py",
         "//bindings/pydrake/common/test_utilities:numpy_compare_py",
+        "//bindings/pydrake/common/test_utilities:scipy_stub_py",
     ],
 )
 
@@ -475,7 +531,8 @@ drake_py_unittest(
     name = "planar_scenegraph_visualizer_test",
     data = [
         "//examples/multibody/cart_pole:models",
-        "//manipulation/models/iiwa_description:models",
+        "//geometry:test_obj_files",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":analysis_py",

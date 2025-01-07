@@ -1,11 +1,3 @@
-if(NOT APPLE)
-    # libxcrypt
-    set(libxcrypt_version 4.4.25)
-    set(libxcrypt_url "https://github.com/besser82/libxcrypt/archive/v${libxcrypt_version}/libxcrypt-${libxcrypt_version}.tar.gz")
-    set(libxcrypt_md5 "4828b1530f5bf35af0b45b35acc4db1d")
-    list(APPEND ALL_PROJECTS libxcrypt)
-endif()
-
 # zlib
 set(zlib_version 1.2.11)
 set(zlib_url "https://github.com/madler/zlib/archive/v${zlib_version}.zip")
@@ -21,27 +13,9 @@ set(eigen_dlname "eigen-${eigen_version}.tar.gz")
 list(APPEND ALL_PROJECTS eigen)
 
 # lapack (blas)
-set(lapack_version 3.10.0)
-set(lapack_url "https://github.com/Reference-LAPACK/lapack/archive/v${lapack_version}.tar.gz")
-set(lapack_md5 "d70fc27a8bdebe00481c97c728184f09")
-list(APPEND ALL_PROJECTS lapack)
-
-# ipopt (requires mumps)
-if(APPLE)
-    set(mumps_version 5.4.1)  # Latest available in Ubuntu.
-    set(mumps_url
-        "http://archive.ubuntu.com/ubuntu/pool/universe/m/mumps/mumps_${mumps_version}.orig.tar.gz"
-        "http://mumps.enseeiht.fr/MUMPS_${mumps_version}.tar.gz"
-    )
-    set(mumps_md5 "93be789bf9c6c341a78c16038da3241b")
-    set(mumps_dlname "mumps-${mumps_version}.tar.gz")
-    list(APPEND ALL_PROJECTS mumps)
-
-    # This must match the version in tools/workspace/ipopt_internal_fromsource.
-    # The matching is automatically enforced by a linter script.
-    set(ipopt_version 3.14.14)
-    set(ipopt_url "https://github.com/coin-or/Ipopt/archive/refs/tags/releases/${ipopt_version}.tar.gz")
-    set(ipopt_md5 "75c288ff392e95db0ac6b296b2b3b367")
-    set(ipopt_dlname "ipopt-${ipopt_version}.tar.gz")
-    list(APPEND ALL_PROJECTS ipopt)
+if(NOT APPLE)
+  set(lapack_version 3.10.0)
+  set(lapack_url "https://github.com/Reference-LAPACK/lapack/archive/v${lapack_version}.tar.gz")
+  set(lapack_md5 "d70fc27a8bdebe00481c97c728184f09")
+  list(APPEND ALL_PROJECTS lapack)
 endif()

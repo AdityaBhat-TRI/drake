@@ -29,9 +29,9 @@ Otherwise, if any set in the cartesian product is empty, the whole product
 is empty.
 
 @ingroup geometry_optimization */
-class CartesianProduct final : public ConvexSet, private ShapeReifier {
+class CartesianProduct final : public ConvexSet {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(CartesianProduct)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(CartesianProduct);
 
   /** Constructs a default (zero-dimensional, nonempty) set. */
   CartesianProduct();
@@ -73,6 +73,14 @@ class CartesianProduct final : public ConvexSet, private ShapeReifier {
   product. */
   const ConvexSet& factor(int i) const;
 
+  /** Returns a copy of the matrix A if it has been set, or nullopt otherwise.
+   */
+  std::optional<Eigen::MatrixXd> A() const { return A_; }
+
+  /** Returns a copy of the vector b if it has been set, or nullopt otherwise.
+   */
+  std::optional<Eigen::VectorXd> b() const { return b_; }
+
   /** Returns true if each subvector is in its corresponding set with tolerance
   `tol`.  Note: Tolerance support for this query varies in the different convex
   set implementations. */
@@ -82,10 +90,19 @@ class CartesianProduct final : public ConvexSet, private ShapeReifier {
   product. */
   using ConvexSet::CalcVolume;
 
+  /** A CartesianProduct is bounded if and only if each constituent set is
+  bounded. This class honors requests for parallelism only so far as its
+  constituent sets do.
+  @param parallelism The maximum number of threads to use.
+  @note See @ref ConvexSet::IsBounded "parent class's documentation" for more
+  details. */
+  using ConvexSet::IsBounded;
+
  private:
   std::unique_ptr<ConvexSet> DoClone() const final;
 
-  std::optional<bool> DoIsBoundedShortcut() const final;
+  std::optional<bool> DoIsBoundedShortcutParallel(
+      Parallelism parallelism) const final;
 
   bool DoIsEmpty() const final;
 
@@ -127,9 +144,8 @@ class CartesianProduct final : public ConvexSet, private ShapeReifier {
   std::pair<std::unique_ptr<Shape>, math::RigidTransformd> DoToShapeWithPose()
       const final;
 
-  // Implement support shapes for the ShapeReifier interface.
-  using ShapeReifier::ImplementGeometry;
-  void ImplementGeometry(const Cylinder& cylinder, void* data) final;
+  std::unique_ptr<ConvexSet> DoAffineHullShortcut(
+      std::optional<double> tol) const final;
 
   // The member variables are not const in order to support move semantics.
   ConvexSets sets_{};

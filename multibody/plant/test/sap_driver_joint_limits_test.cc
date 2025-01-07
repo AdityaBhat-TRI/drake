@@ -3,7 +3,6 @@
 
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/multibody/contact_solvers/contact_solver_results.h"
 #include "drake/multibody/contact_solvers/sap/sap_contact_problem.h"
@@ -173,8 +172,7 @@ class KukaIiwaArmTests : public ::testing::Test {
     VectorXd v0(plant.num_velocities());
     VectorXd q0(plant.num_positions());
 
-    for (JointIndex joint_index(0); joint_index < plant.num_joints();
-         ++joint_index) {
+    for (JointIndex joint_index : plant.GetJointIndices()) {
       const Joint<double>& joint = plant.get_joint(joint_index);
 
       if (joint.num_velocities() == 1) {  // skip welds in the model.
@@ -246,21 +244,17 @@ class KukaIiwaArmTests : public ::testing::Test {
   std::vector<ModelInstanceIndex> LoadIiwaWithGripper(
       MultibodyPlant<double>* plant) const {
     DRAKE_DEMAND(plant != nullptr);
-    const char kArmFilePath[] =
-        "drake/manipulation/models/iiwa_description/urdf/"
-        "iiwa14_no_collision.urdf";
-
-    const char kWsg50FilePath[] =
-        "drake/manipulation/models/wsg_50_description/sdf/schunk_wsg_50.sdf";
+    const char kArmUrl[] =
+        "package://drake_models/iiwa_description/urdf/iiwa14_no_collision.urdf";
+    const char kWsg50Url[] =
+        "package://drake_models/wsg_50_description/sdf/schunk_wsg_50.sdf";
 
     Parser parser(plant);
     parser.SetAutoRenaming(true);
-    ModelInstanceIndex arm_model =
-        parser.AddModels(FindResourceOrThrow(kArmFilePath)).at(0);
+    ModelInstanceIndex arm_model = parser.AddModelsFromUrl(kArmUrl).at(0);
 
     // Add the gripper.
-    ModelInstanceIndex gripper_model =
-        parser.AddModels(FindResourceOrThrow(kWsg50FilePath)).at(0);
+    ModelInstanceIndex gripper_model = parser.AddModelsFromUrl(kWsg50Url).at(0);
 
     const auto& base_body = plant->GetBodyByName("base", arm_model);
     const auto& end_effector = plant->GetBodyByName("iiwa_link_7", arm_model);
@@ -277,7 +271,7 @@ class KukaIiwaArmTests : public ::testing::Test {
                              const VectorX<double>& gear_ratios) const {
     DRAKE_DEMAND(plant != nullptr);
     int local_joint_index = 0;
-    for (JointActuatorIndex index(0); index < plant->num_actuators(); ++index) {
+    for (JointActuatorIndex index : plant->GetJointActuatorIndices()) {
       JointActuator<double>& joint_actuator =
           plant->get_mutable_joint_actuator(index);
       if (std::count(models.begin(), models.end(),
@@ -293,11 +287,10 @@ class KukaIiwaArmTests : public ::testing::Test {
   // Set arbitrary state, though within joint limits.
   void SetArbitraryState(const MultibodyPlant<double>& plant,
                          Context<double>* context) {
-    for (JointIndex joint_index(0); joint_index < plant.num_joints();
-         ++joint_index) {
+    for (JointIndex joint_index : plant.GetJointIndices()) {
       const Joint<double>& joint = plant.get_joint(joint_index);
       // This model only has weld, prismatic, and revolute joints.
-      if (joint.type_name() == "revolute") {
+      if (joint.type_name() == RevoluteJoint<double>::kTypeName) {
         const RevoluteJoint<double>& revolute_joint =
             dynamic_cast<const RevoluteJoint<double>&>(joint);
         // Arbitrary position within position limits.
@@ -312,7 +305,7 @@ class KukaIiwaArmTests : public ::testing::Test {
         // Set damping.
         revolute_joint.SetDamping(
             context, kJointDamping(revolute_joint.velocity_start()));
-      } else if (joint.type_name() == "prismatic") {
+      } else if (joint.type_name() == PrismaticJoint<double>::kTypeName) {
         const PrismaticJoint<double>& prismatic_joint =
             dynamic_cast<const PrismaticJoint<double>&>(joint);
         // Arbitrary position within position limits.
@@ -461,8 +454,7 @@ TEST_F(KukaIiwaArmTests, LimitConstraints) {
   int num_constraints = 0;  // count number of constraints visited.
   // The manager adds limit constraints in the order joints are specified.
   // Therefore we verify the limit constraint for each joint.
-  for (JointIndex joint_index(0); joint_index < plant_.num_joints();
-       ++joint_index) {
+  for (JointIndex joint_index : plant_.GetJointIndices()) {
     const Joint<double>& joint = plant_.get_joint(joint_index);
     if (joint.num_velocities() == 1) {
       const int v_index = joint.velocity_start();

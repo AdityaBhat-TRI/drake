@@ -2,10 +2,16 @@
 # //tools/wheel:builder for the user interface.
 
 import argparse
+import gzip
+import io
 import locale
 import os
+import pathlib
 import re
+import shutil
+import subprocess
 import sys
+import tarfile
 
 # Location where most of the build will take place.
 build_root = '/opt/drake-wheel-build'
@@ -55,6 +61,79 @@ def _check_version(version):
         r'(\.post(0|[1-9][0-9]*))?(\.dev(0|[1-9][0-9]*))?'
         r'([+][a-z0-9]+([-_\.][a-z0-9]+)*)?$',
         version) is not None
+
+
+def strip_tar_metadata(info: tarfile.TarInfo):
+    """
+    Removes some metadata (owner, timestamp) from a TarInfo.
+    """
+    info.uid = info.gid = 0
+    info.uname = info.gname = 'root'
+    info.mtime = 0
+    info.pax_headers = {}
+    return info
+
+
+def create_snopt_tgz(*, snopt_path, output):
+    """
+    If `snopt_path` is 'git', then fetches the SNOPT source code from git and
+    compresses it onto the given `output` filename (typically 'snopt.tar.gz').
+    Otherwise, just copies the `snopt_path` file to `output`.
+    """
+    if snopt_path != 'git':
+        shutil.copy(src=snopt_path, dst=output)
+        return
+    print('[-] Creating SNOPT archive...', flush=True)
+    tar_buffer = io.BytesIO()
+    tar_writer = tarfile.open(mode='w', fileobj=tar_buffer)
+
+    # Ask Bazel where it keeps its externals.
+    command = ['bazel', 'info', 'output_base']
+    output_base = subprocess.check_output(
+        command, cwd=resource_root,
+        stderr=subprocess.DEVNULL, encoding='utf-8').strip()
+    bazel_snopt = os.path.join(output_base, 'external/snopt')
+
+    # Ask Bazel to fetch SNOPT from its default git pin.
+    command = [
+        'bazel', 'fetch', '@snopt//:snopt_cwrap',
+        '--repo_env=SNOPT_PATH=git',
+    ]
+    subprocess.run(command, check=True, cwd=resource_root)
+
+    # Compress the files into a tar archive. We only want the files from these
+    # subdirectories (and not recursively):
+    keep_dirs = [
+        'interfaces/include',
+        'interfaces/src',
+        'src',
+    ]
+    for keep_dir in keep_dirs:
+        full_dir = os.path.join(bazel_snopt, keep_dir)
+        for name in sorted(os.listdir(full_dir)):
+            # Compute full_file as the local path, and tgz_file as the path
+            # as it will exist within the archive. Only add files, not dirs.
+            full_file = os.path.join(full_dir, name)
+            if not os.path.isfile(full_file):
+                continue
+            tgz_file = os.path.join('snopt', keep_dir, name)
+            # Now here's a bit of magic: we need to undo the 'patch' commands
+            # that were run by Bazel while fetching, since it will need to run
+            # them again inside of the container. If we see filenames 'foo' and
+            # 'foo.orig', we should skip 'foo' and add 'foo.orig' as 'foo'.
+            if os.path.isfile(full_file + '.orig'):
+                continue
+            if tgz_file.endswith('.orig'):
+                tgz_file = tgz_file[:-len('.orig')]
+            # Add the file.
+            tar_writer.add(full_file, tgz_file, recursive=False,
+                           filter=strip_tar_metadata)
+    tar_writer.close()
+
+    # Write to disk and gzip (as required by Drake's SNOPT_PATH).
+    tar_buffer.seek(0)
+    tgz_data = gzip.compress(tar_buffer.read(), compresslevel=0, mtime=0)
+    pathlib.Path(output).write_bytes(tgz_data)
 
 
 def find_tests(*test_subdirs):
@@ -122,6 +201,10 @@ def do_main(args, platform):
         '--no-test', dest='test', action='store_false',
         help='build images but do not run tests')
 
+    parser.add_argument(
+        '--snopt-path', default='git',
+        help='Path to snopt.tgz, otherwise defaults to fetching from git')
+
     if platform is not None:
         platform.add_build_arguments(parser)
         platform.add_selection_arguments(parser)
@@ -141,6 +224,10 @@ def do_main(args, platform):
     if options.pep440:
         print(f'Version \'{options.version}\' conforms to PEP 440')
         return
+
+    if options.snopt_path != 'git':
+        if not os.path.exists(options.snopt_path):
+            die(f'The snopt-file path \'{options.snopt_path}\' does not exist')
 
     if platform is not None:
         platform.build(options)

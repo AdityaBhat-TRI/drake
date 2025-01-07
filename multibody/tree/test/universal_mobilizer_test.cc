@@ -36,6 +36,7 @@ class UniversalMobilizerTest : public MobilizerTester {
     mobilizer_ = &AddJointAndFinalize<UniversalJoint, UniversalMobilizer>(
         std::make_unique<UniversalJoint<double>>(
             "joint0", tree().world_body().body_frame(), body_->body_frame()));
+    mutable_mobilizer_ = const_cast<UniversalMobilizer<double>*>(mobilizer_);
   }
 
   MatrixXd CalcHMatrix(const Vector2d angles) {
@@ -48,6 +49,7 @@ class UniversalMobilizerTest : public MobilizerTester {
 
  protected:
   const UniversalMobilizer<double>* mobilizer_{nullptr};
+  UniversalMobilizer<double>* mutable_mobilizer_{nullptr};
 };
 
 TEST_F(UniversalMobilizerTest, CanRotateOrTranslate) {
@@ -60,16 +62,16 @@ TEST_F(UniversalMobilizerTest, StateAccess) {
   const Vector2d some_values1(1.5, 2.5);
   const Vector2d some_values2(std::sqrt(2), 3.);
   // Verify we can set a universal mobilizer position given the model's context.
-  mobilizer_->set_angles(context_.get(), some_values1);
+  mobilizer_->SetAngles(context_.get(), some_values1);
   EXPECT_EQ(mobilizer_->get_angles(*context_), some_values1);
-  mobilizer_->set_angles(context_.get(), some_values2);
+  mobilizer_->SetAngles(context_.get(), some_values2);
   EXPECT_EQ(mobilizer_->get_angles(*context_), some_values2);
 
   // Verify we can set a universal mobilizer position rate given the model's
   // context.
-  mobilizer_->set_angular_rates(context_.get(), some_values1);
+  mobilizer_->SetAngularRates(context_.get(), some_values1);
   EXPECT_EQ(mobilizer_->get_angular_rates(*context_), some_values1);
-  mobilizer_->set_angular_rates(context_.get(), some_values2);
+  mobilizer_->SetAngularRates(context_.get(), some_values2);
   EXPECT_EQ(mobilizer_->get_angular_rates(*context_), some_values2);
 }
 
@@ -77,50 +79,44 @@ TEST_F(UniversalMobilizerTest, ZeroState) {
   const Vector2d some_values1(1.5, 2.5);
   const Vector2d some_values2(std::sqrt(2), 3.);
   // Set the state to some arbitrary non-zero value.
-  mobilizer_->set_angles(context_.get(), some_values1);
-  mobilizer_->set_angular_rates(context_.get(), some_values2);
+  mobilizer_->SetAngles(context_.get(), some_values1);
+  mobilizer_->SetAngularRates(context_.get(), some_values2);
   EXPECT_EQ(mobilizer_->get_angles(*context_), some_values1);
   EXPECT_EQ(mobilizer_->get_angular_rates(*context_), some_values2);
 
   // Set the "zero state" for this mobilizer, which does happen to be that of
   // zero position and velocity.
-  mobilizer_->set_zero_state(*context_, &context_->get_mutable_state());
+  mobilizer_->SetZeroState(*context_, &context_->get_mutable_state());
   EXPECT_EQ(mobilizer_->get_angles(*context_), Vector2d::Zero());
   EXPECT_EQ(mobilizer_->get_angular_rates(*context_), Vector2d::Zero());
 }
 
 TEST_F(UniversalMobilizerTest, DefaultPosition) {
-  UniversalMobilizer<double>* mutable_mobilizer =
-      &mutable_tree().get_mutable_variant(*mobilizer_);
-
   EXPECT_EQ(mobilizer_->get_angles(*context_), Vector2d::Zero());
 
-  Vector2d new_defualt(.4, .5);
-  mutable_mobilizer->set_default_position(new_defualt);
+  Vector2d new_default(.4, .5);
+  mutable_mobilizer_->set_default_position(new_default);
   mobilizer_->set_default_state(*context_, &context_->get_mutable_state());
 
-  EXPECT_EQ(mobilizer_->get_angles(*context_), new_defualt);
+  EXPECT_EQ(mobilizer_->get_angles(*context_), new_default);
 }
 
 TEST_F(UniversalMobilizerTest, RandomState) {
   RandomGenerator generator;
   std::uniform_real_distribution<symbolic::Expression> uniform;
 
-  UniversalMobilizer<double>* mutable_mobilizer =
-      &mutable_tree().get_mutable_variant(*mobilizer_);
-
   // Default behavior is to set to zero.
-  mutable_mobilizer->set_random_state(*context_, &context_->get_mutable_state(),
-                                      &generator);
+  mutable_mobilizer_->set_random_state(
+      *context_, &context_->get_mutable_state(), &generator);
   EXPECT_EQ(mobilizer_->get_angles(*context_), Vector2d::Zero());
   EXPECT_EQ(mobilizer_->get_angular_rates(*context_), Vector2d::Zero());
 
   // Set position to be random, but not velocity (yet).
-  mutable_mobilizer->set_random_position_distribution(
+  mutable_mobilizer_->set_random_position_distribution(
       Vector2<symbolic::Expression>(uniform(generator) + 2.0,
                                     uniform(generator) - 2.0));
-  mutable_mobilizer->set_random_state(*context_, &context_->get_mutable_state(),
-                                      &generator);
+  mutable_mobilizer_->set_random_state(
+      *context_, &context_->get_mutable_state(), &generator);
   EXPECT_GE(mobilizer_->get_angles(*context_)[0], 2.0);
   EXPECT_LE(mobilizer_->get_angles(*context_)[0], 3.0);
   EXPECT_GE(mobilizer_->get_angles(*context_)[1], -2.0);
@@ -128,11 +124,11 @@ TEST_F(UniversalMobilizerTest, RandomState) {
   EXPECT_EQ(mobilizer_->get_angular_rates(*context_), Vector2d::Zero());
 
   // Set the velocity distribution.  Now both should be random.
-  mutable_mobilizer->set_random_velocity_distribution(
+  mutable_mobilizer_->set_random_velocity_distribution(
       Vector2<symbolic::Expression>(uniform(generator) - 3.0,
                                     uniform(generator) + 3.0));
-  mutable_mobilizer->set_random_state(*context_, &context_->get_mutable_state(),
-                                      &generator);
+  mutable_mobilizer_->set_random_state(
+      *context_, &context_->get_mutable_state(), &generator);
   EXPECT_GE(mobilizer_->get_angles(*context_)[0], 2.0);
   EXPECT_LE(mobilizer_->get_angles(*context_)[0], 3.0);
   EXPECT_GE(mobilizer_->get_angles(*context_)[1], -2.0);
@@ -145,15 +141,15 @@ TEST_F(UniversalMobilizerTest, RandomState) {
   // Check that they change on a second draw from the distribution.
   const Vector2d last_angles = mobilizer_->get_angles(*context_);
   const Vector2d last_angular_rates = mobilizer_->get_angular_rates(*context_);
-  mutable_mobilizer->set_random_state(*context_, &context_->get_mutable_state(),
-                                      &generator);
+  mutable_mobilizer_->set_random_state(
+      *context_, &context_->get_mutable_state(), &generator);
   EXPECT_NE(mobilizer_->get_angles(*context_), last_angles);
   EXPECT_NE(mobilizer_->get_angular_rates(*context_), last_angular_rates);
 }
 
 TEST_F(UniversalMobilizerTest, CalcAcrossMobilizerTransform) {
   const Vector2d angles(1, 0.5);
-  mobilizer_->set_angles(context_.get(), angles);
+  mobilizer_->SetAngles(context_.get(), angles);
   const RigidTransformd X_FM(
       mobilizer_->CalcAcrossMobilizerTransform(*context_));
 
@@ -172,7 +168,7 @@ TEST_F(UniversalMobilizerTest, CalcAcrossMobilizerTransform) {
 TEST_F(UniversalMobilizerTest, CalcAcrossMobilizerSpatialVeloctiy) {
   const Vector2d angles(1, 0.5);
   const Vector2d angular_rates(1.5, 2);
-  mobilizer_->set_angles(context_.get(), angles);
+  mobilizer_->SetAngles(context_.get(), angles);
   const SpatialVelocity<double> V_FM =
       mobilizer_->CalcAcrossMobilizerSpatialVelocity(*context_, angular_rates);
 
@@ -189,8 +185,8 @@ TEST_F(UniversalMobilizerTest, CalcAcrossMobilizerSpatialAcceleration) {
   const Vector2d angles(1, 0.5);
   const Vector2d angular_rates(1.5, 2);
   const Vector2d angular_acceleration(3, 2.5);
-  mobilizer_->set_angles(context_.get(), angles);
-  mobilizer_->set_angular_rates(context_.get(), angular_rates);
+  mobilizer_->SetAngles(context_.get(), angles);
+  mobilizer_->SetAngularRates(context_.get(), angular_rates);
 
   const SpatialAcceleration<double> A_FM =
       mobilizer_->CalcAcrossMobilizerSpatialAcceleration(*context_,
@@ -211,7 +207,7 @@ TEST_F(UniversalMobilizerTest, CalcAcrossMobilizerSpatialAcceleration) {
 
 TEST_F(UniversalMobilizerTest, ProjectSpatialForce) {
   const Vector2d angles(1, 0.5);
-  mobilizer_->set_angles(context_.get(), angles);
+  mobilizer_->SetAngles(context_.get(), angles);
 
   const Vector3d torque_Mo_F(1.0, 2.0, 3.0);
   const Vector3d force_Mo_F(1.0, 2.0, 3.0);
@@ -261,7 +257,7 @@ TEST_F(UniversalMobilizerTest, KinematicMapping) {
 TEST_F(UniversalMobilizerTest, MapUsesN) {
   // Set an arbitrary "non-zero" state.
   const Vector2d some_values(1.5, 2.5);
-  mobilizer_->set_angles(context_.get(), some_values);
+  mobilizer_->SetAngles(context_.get(), some_values);
 
   // Set arbitrary v and MapVelocityToQDot.
   Vector2d v(3.5, 4.5);
@@ -280,7 +276,7 @@ TEST_F(UniversalMobilizerTest, MapUsesN) {
 TEST_F(UniversalMobilizerTest, MapUsesNplus) {
   // Set an arbitrary "non-zero" state.
   const Vector2d some_values(1.5, 2.5);
-  mobilizer_->set_angles(context_.get(), some_values);
+  mobilizer_->SetAngles(context_.get(), some_values);
 
   // Set arbitrary qdot and MapQDotToVelocity.
   Vector2d qdot(3.5, 4.5);

@@ -1,4 +1,5 @@
 import gc
+import scipy.sparse
 import unittest
 import numpy as np
 
@@ -28,6 +29,7 @@ from pydrake.systems.primitives import (
     Demultiplexer, Demultiplexer_,
     DiscreteDerivative, DiscreteDerivative_,
     DiscreteTimeDelay, DiscreteTimeDelay_,
+    DiscreteTimeIntegrator_,
     FirstOrderLowPassFilter,
     FirstOrderTaylorApproximation,
     Gain, Gain_,
@@ -51,6 +53,7 @@ from pydrake.systems.primitives import (
     Saturation, Saturation_,
     SharedPointerSystem, SharedPointerSystem_,
     Sine, Sine_,
+    SparseMatrixGain_,
     StateInterpolatorWithDiscreteDerivative,
     StateInterpolatorWithDiscreteDerivative_,
     SymbolicVectorSystem, SymbolicVectorSystem_,
@@ -91,6 +94,7 @@ class TestGeneral(unittest.TestCase):
         self._check_instantiations(Demultiplexer_)
         self._check_instantiations(DiscreteDerivative_)
         self._check_instantiations(DiscreteTimeDelay_)
+        self._check_instantiations(DiscreteTimeIntegrator_)
         self._check_instantiations(Gain_)
         self._check_instantiations(Integrator_)
         self._check_instantiations(LinearSystem_)
@@ -113,6 +117,20 @@ class TestGeneral(unittest.TestCase):
         self._check_instantiations(VectorLogSink_)
         self._check_instantiations(WrapToSystem_)
         self._check_instantiations(ZeroOrderHold_)
+
+    @numpy_compare.check_all_types
+    def test_discrete_time_integrator(self, T):
+        time_step = 0.1
+        integrator = DiscreteTimeIntegrator_[T](size=2, time_step=time_step)
+        self.assertEqual(integrator.time_step(), time_step)
+        context = integrator.CreateDefaultContext()
+        x = np.array([1., 2.])
+        integrator.set_integral_value(context=context, value=x)
+        u = np.array([3., 4.])
+        integrator.get_input_port(0).FixValue(context, u)
+        x_next = integrator.EvalUniquePeriodicDiscreteUpdate(
+            context).get_vector()._get_value_copy()
+        numpy_compare.assert_float_equal(x_next, x + time_step * u)
 
     def test_linear_affine_system(self):
         # Just make sure linear system is spelled correctly.
@@ -746,6 +764,38 @@ class TestGeneral(unittest.TestCase):
         discrete_derivative = DiscreteDerivative(
             num_inputs=5, time_step=0.5, suppress_initial_transient=False)
         self.assertFalse(discrete_derivative.suppress_initial_transient())
+
+    @numpy_compare.check_all_types
+    def test_sparse_matrix_gain(self, T):
+        D = scipy.sparse.csc_matrix(
+            (np.array([2, 1., 3]), np.array([0, 1, 0]),
+             np.array([0, 2, 2, 3])), shape=(2, 3))
+        dut = SparseMatrixGain_[T](D=D)
+        context = dut.CreateDefaultContext()
+        u = np.array([1, 2, 3])
+        dut.get_input_port().FixValue(context, u)
+        y = dut.get_output_port().Eval(context)
+        numpy_compare.assert_float_equal(y, D.todense() @ u)
+
+        numpy_compare.assert_float_equal(D.todense(), dut.D().todense())
+        D2 = scipy.sparse.csc_matrix(
+            (np.array([1, 4, 6]), np.array([0, 1, 0]),
+             np.array([0, 2, 2, 3])), shape=(2, 3))
+        dut.set_D(D=D2)
+        numpy_compare.assert_float_equal(D2.todense(), dut.D().todense())
+
+        # Make sure empty matrices work as expected.
+        D00 = scipy.sparse.csc_matrix(([], [], []), shape=(0, 0))
+        # Having zero rows doesn't work yet...
+        # D01 = scipy.sparse.csc_matrix(([], [], [0]), shape=(0, 1))
+        D10 = scipy.sparse.csc_matrix(([1.2], [0], [0]), shape=(1, 0))
+        for D in [D00, D10]:
+            dut = SparseMatrixGain_[T](D=D)
+            context = dut.CreateDefaultContext()
+            u = np.ones((D.shape[1], 1))
+            dut.get_input_port().FixValue(context, u)
+            y = dut.get_output_port().Eval(context)
+            self.assertEqual(y.size, D.shape[0])
 
     def test_state_interpolator_with_discrete_derivative(self):
         state_interpolator = StateInterpolatorWithDiscreteDerivative(

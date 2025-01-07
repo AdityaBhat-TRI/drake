@@ -50,6 +50,9 @@ MeshcatPointCloudVisualizer<T>::MeshcatPointCloudVisualizer(
 }
 
 template <typename T>
+MeshcatPointCloudVisualizer<T>::~MeshcatPointCloudVisualizer() = default;
+
+template <typename T>
 void MeshcatPointCloudVisualizer<T>::Delete() const {
   meshcat_->Delete(path_);
 }
@@ -87,4 +90,4 @@ MeshcatPointCloudVisualizer<T>::DoGetGraphvizFragment(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::geometry::MeshcatPointCloudVisualizer)
+    class ::drake::geometry::MeshcatPointCloudVisualizer);

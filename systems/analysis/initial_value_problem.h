@@ -63,9 +63,9 @@ class InitialValueProblem {
   /// Default integration accuracy in the relative tolerance sense.
   static const double kDefaultAccuracy;
   /// Default initial integration step size.
-  static const T kInitialStepSize;
+  static const double kInitialStepSize;
   /// Default maximum integration step size.
-  static const T kMaxStepSize;
+  static const double kMaxStepSize;
 
   /// General ODE system d𝐱/dt = f(t, 𝐱; 𝐤) function type.
   ///
@@ -165,4 +165,4 @@ class InitialValueProblem {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class drake::systems::InitialValueProblem)
+    class drake::systems::InitialValueProblem);

@@ -1,5 +1,6 @@
 #include "drake/solvers/scs_solver.h"
 
+#include <fstream>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -7,6 +8,7 @@
 
 #include <Eigen/Sparse>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 // clang-format off
 #include <scs.h>
@@ -18,11 +20,40 @@
 #include "drake/common/scope_exit.h"
 #include "drake/common/text_logging.h"
 #include "drake/math/eigen_sparse_triplet.h"
+#include "drake/math/matrix_util.h"
 #include "drake/math/quadratic_form.h"
 #include "drake/solvers/aggregate_costs_constraints.h"
 #include "drake/solvers/mathematical_program.h"
 #include "drake/solvers/mathematical_program_result.h"
 #include "drake/solvers/scs_clarabel_common.h"
+
+// This function must appear in the global namespace -- the Serialize pattern
+// uses ADL (argument-dependent lookup) and the namespace for the ScsSettings
+// struct is the global namespace. (We can't even use an anonymous namespace!)
+static void Serialize(
+    drake::solvers::internal::SpecificOptions* archive,
+    // NOLINTNEXTLINE(runtime/references) to match Serialize concept.
+    ScsSettings& settings) {
+  using drake::MakeNameValue;
+  archive->Visit(MakeNameValue("normalize", &settings.normalize));
+  archive->Visit(MakeNameValue("scale", &settings.scale));
+  archive->Visit(MakeNameValue("adaptive_scale", &settings.adaptive_scale));
+  archive->Visit(MakeNameValue("rho_x", &settings.rho_x));
+  archive->Visit(MakeNameValue("max_iters", &settings.max_iters));
+  archive->Visit(MakeNameValue("eps_abs", &settings.eps_abs));
+  archive->Visit(MakeNameValue("eps_rel", &settings.eps_rel));
+  archive->Visit(MakeNameValue("eps_infeas", &settings.eps_infeas));
+  archive->Visit(MakeNameValue("alpha", &settings.alpha));
+  archive->Visit(MakeNameValue("time_limit_secs", &settings.time_limit_secs));
+  archive->Visit(MakeNameValue("verbose", &settings.verbose));
+  archive->Visit(MakeNameValue("warm_start", &settings.warm_start));
+  archive->Visit(MakeNameValue("acceleration_lookback",  // BR
+                               &settings.acceleration_lookback));
+  archive->Visit(MakeNameValue("acceleration_interval",  // BR
+                               &settings.acceleration_interval));
+  // TODO(jwnimmer-tri) Handle write_data_filename.
+  // TODO(jwnimmer-tri) Handle log_csv_filename.
+}
 
 namespace drake {
 namespace solvers {
@@ -246,117 +277,6 @@ void SetScsProblemData(
     scs_problem_data->c[i] = c[i];
   }
 }
-}  // namespace
-
-bool ScsSolver::is_available() {
-  return true;
-}
-
-namespace {
-// This should be invoked only once on each unique instance of ScsSettings.
-// Namely, only call this function for once in DoSolve.
-void SetScsSettings(std::unordered_map<std::string, int>* solver_options_int,
-                    const bool print_to_console, ScsSettings* scs_settings) {
-  auto it = solver_options_int->find("normalize");
-  if (it != solver_options_int->end()) {
-    scs_settings->normalize = it->second;
-    solver_options_int->erase(it);
-  }
-  it = solver_options_int->find("adaptive_scale;");
-  if (it != solver_options_int->end()) {
-    scs_settings->adaptive_scale = it->second;
-    solver_options_int->erase(it);
-  }
-  it = solver_options_int->find("max_iters");
-  if (it != solver_options_int->end()) {
-    scs_settings->max_iters = it->second;
-    solver_options_int->erase(it);
-  }
-  it = solver_options_int->find("verbose");
-  if (it != solver_options_int->end()) {
-    // The solver specific option has the highest priority.
-    scs_settings->verbose = it->second;
-    solver_options_int->erase(it);
-  } else {
-    // The common option has the second highest priority.
-    scs_settings->verbose = print_to_console ? 1 : 0;
-  }
-  it = solver_options_int->find("warm_start");
-  if (it != solver_options_int->end()) {
-    scs_settings->warm_start = it->second;
-    solver_options_int->erase(it);
-  }
-  it = solver_options_int->find("acceleration_lookback");
-  if (it != solver_options_int->end()) {
-    scs_settings->acceleration_lookback = it->second;
-    solver_options_int->erase(it);
-  }
-  it = solver_options_int->find("acceleration_interval");
-  if (it != solver_options_int->end()) {
-    scs_settings->acceleration_interval = it->second;
-    solver_options_int->erase(it);
-  }
-  if (!solver_options_int->empty()) {
-    throw std::invalid_argument("Unsupported SCS solver options.");
-  }
-}
-
-// This should be invoked only once on each unique instance of ScsSettings.
-// Namely, only call this function for once in DoSolve.
-void SetScsSettings(
-    std::unordered_map<std::string, double>* solver_options_double,
-    ScsSettings* scs_settings) {
-  auto it = solver_options_double->find("scale");
-  if (it != solver_options_double->end()) {
-    scs_settings->scale = it->second;
-    solver_options_double->erase(it);
-  }
-  it = solver_options_double->find("rho_x");
-  if (it != solver_options_double->end()) {
-    scs_settings->rho_x = it->second;
-    solver_options_double->erase(it);
-  }
-  it = solver_options_double->find("eps_abs");
-  if (it != solver_options_double->end()) {
-    scs_settings->eps_abs = it->second;
-    solver_options_double->erase(it);
-  } else {
-    // SCS 3.0 uses 1E-4 as the default value, see
-    // https://www.cvxgrp.org/scs/api/settings.html?highlight=eps_abs). This
-    // tolerance is too loose. We set the default tolerance to 1E-5 for better
-    // accuracy.
-    scs_settings->eps_abs = 1E-5;
-  }
-  it = solver_options_double->find("eps_rel");
-  if (it != solver_options_double->end()) {
-    scs_settings->eps_rel = it->second;
-    solver_options_double->erase(it);
-  } else {
-    // SCS 3.0 uses 1E-4 as the default value, see
-    // https://www.cvxgrp.org/scs/api/settings.html?highlight=eps_rel). This
-    // tolerance is too loose. We set the default tolerance to 1E-5 for better
-    // accuracy.
-    scs_settings->eps_rel = 1E-5;
-  }
-  it = solver_options_double->find("eps_infeas");
-  if (it != solver_options_double->end()) {
-    scs_settings->eps_infeas = it->second;
-    solver_options_double->erase(it);
-  }
-  it = solver_options_double->find("alpha");
-  if (it != solver_options_double->end()) {
-    scs_settings->alpha = it->second;
-    solver_options_double->erase(it);
-  }
-  it = solver_options_double->find("time_limit_secs");
-  if (it != solver_options_double->end()) {
-    scs_settings->time_limit_secs = it->second;
-    solver_options_double->erase(it);
-  }
-  if (!solver_options_double->empty()) {
-    throw std::invalid_argument("Unsupported SCS solver options.");
-  }
-}
 
 void SetBoundingBoxDualSolution(
     const MathematicalProgram& prog, const Eigen::Ref<const Eigen::VectorXd>& y,
@@ -384,12 +304,65 @@ void SetBoundingBoxDualSolution(
     result->set_dual_solution(prog.bounding_box_constraints()[i], bbcon_dual);
   }
 }
+
+void WriteScsReproduction(std::string filename,
+                          const Eigen::SparseMatrix<double>& P,
+                          const Eigen::Map<Eigen::VectorXd>& c_vec,
+                          const Eigen::SparseMatrix<double>& A,
+                          const Eigen::Map<Eigen::VectorXd>& b_vec,
+                          const ScsCone& cone) {
+  std::ofstream out_file(filename);
+  if (!out_file.is_open()) {
+    log()->error(
+        "Failed to open kStandaloneReproductionFileName {} for writing; no "
+        "reproduction will be generated.");
+    return;
+  }
+  out_file << fmt::format(
+      R"""(
+import scs
+import numpy as np
+from scipy import sparse
+
+c = np.array([{}], dtype=np.float64)
+b = np.array([{}], dtype=np.float64)
+)""",
+      fmt::join(c_vec.data(), c_vec.data() + c_vec.size(), ", "),
+      fmt::join(b_vec.data(), b_vec.data() + b_vec.size(), ", "));
+
+  out_file << math::GeneratePythonCsc(P, "P");
+  out_file << math::GeneratePythonCsc(A, "A");
+
+  out_file << "data=dict(P=P, A=A, b=b, c=c)\n";
+
+  out_file << fmt::format(
+      R"""(cone=dict(z={}, l={}, bu=[{}], bl=[{}], q=[{}], s=[{}], ep={}, ed={}, p=[{}]))""",
+      cone.z, cone.l, fmt::join(cone.bu, cone.bu + cone.bsize, ","),
+      fmt::join(cone.bl, cone.bl + cone.bsize, ","),
+      fmt::join(cone.q, cone.q + cone.qsize, ","),
+      fmt::join(cone.s, cone.s + cone.ssize, ","), cone.ep, cone.ed,
+      fmt::join(cone.p, cone.p + cone.psize, ","));
+
+  // TODO(hongkai.dai): write solver options.
+  out_file << R"""(
+
+solver = scs.SCS(data, cone)
+sol = solver.solve()
+)""";
+  log()->info("SCS reproduction successfully written to {}.", filename);
+
+  out_file.close();
+}
 }  // namespace
 
-void ScsSolver::DoSolve(const MathematicalProgram& prog,
-                        const Eigen::VectorXd& initial_guess,
-                        const SolverOptions& merged_options,
-                        MathematicalProgramResult* result) const {
+bool ScsSolver::is_available() {
+  return true;
+}
+
+void ScsSolver::DoSolve2(const MathematicalProgram& prog,
+                         const Eigen::VectorXd& initial_guess,
+                         internal::SpecificOptions* options,
+                         MathematicalProgramResult* result) const {
   if (!prog.GetVariableScaling().empty()) {
     static const logging::Warn log_once(
         "ScsSolver doesn't support the feature of variable scaling.");
@@ -463,9 +436,6 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
     scs_free(scs_stgs);
   });
 
-  // Set the parameters to default values.
-  scs_set_default_settings(scs_stgs);
-
   // A_row_count will increment, when we add each constraint.
   int A_row_count = 0;
   std::vector<double> b;
@@ -517,6 +487,22 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
                                    &num_linear_constraint_rows);
   cone->l += num_linear_constraint_rows;
 
+  // Parse scalar PSD constraints as linear constraints.
+  // SCS requires ordering the cone with the positive orthant cone coming before
+  // the positive semidefinite cones. So we call
+  // ParseScalarPositiveSemidefiniteConstraints() next to
+  // ParseLinearConstraints(), and finally calling
+  // ParsePositiveSemidefiniteConstraints().
+  int scalar_psd_positive_cone_length{};
+  std::vector<std::optional<int>> scalar_psd_dual_indices;
+  std::vector<std::optional<int>> scalar_lmi_dual_indices;
+  internal::ParseScalarPositiveSemidefiniteConstraints(
+      prog, &A_triplets, &b, &A_row_count, &scalar_psd_positive_cone_length,
+      &scalar_psd_dual_indices, &scalar_lmi_dual_indices);
+  if (scalar_psd_positive_cone_length > 0) {
+    cone->l += scalar_psd_positive_cone_length;
+  }
+
   // Parse Lorentz cone and rotated Lorentz cone constraint
   std::vector<int> second_order_cone_length;
   // y[lorentz_cone_y_start_indices[i]:
@@ -536,6 +522,30 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
   internal::ParseSecondOrderConeConstraints(
       prog, &A_triplets, &b, &A_row_count, &second_order_cone_length,
       &lorentz_cone_y_start_indices, &rotated_lorentz_cone_y_start_indices);
+
+  // Add PSD or LMI constraint on 2x2 matrices. This must be called with the
+  // other second order cone constraint parsing code before
+  // ParsePositiveSemidefiniteConstraints() as the 2x2 PSD/LMI constraints are
+  // formulated as second order cones.
+  int num_second_order_cones_from_psd{};
+  std::vector<std::optional<int>> twobytwo_psd_dual_start_indices;
+  std::vector<std::optional<int>> twobytwo_lmi_dual_start_indices;
+  internal::Parse2x2PositiveSemidefiniteConstraints(
+      prog, &A_triplets, &b, &A_row_count, &num_second_order_cones_from_psd,
+      &twobytwo_psd_dual_start_indices, &twobytwo_lmi_dual_start_indices);
+  for (int i = 0; i < num_second_order_cones_from_psd; ++i) {
+    second_order_cone_length.push_back(3);
+  }
+
+  // Add L2NormCost. L2NormCost should be parsed together with the other second
+  // order cone constraints, since we introduce new second order cone
+  // constraints to formulate the L2 norm cost.
+  std::vector<int> l2norm_costs_lorentz_cone_y_start_indices;
+  std::vector<int> l2norm_costs_t_slack_indices;
+  internal::ParseL2NormCosts(prog, &num_x, &A_triplets, &b, &A_row_count,
+                             &second_order_cone_length,
+                             &l2norm_costs_lorentz_cone_y_start_indices, &c,
+                             &l2norm_costs_t_slack_indices);
 
   // Parse quadratic cost. This MUST be called after parsing the second order
   // cone constraint, as we might convert quadratic cost to second order cone
@@ -566,17 +576,42 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
   }
 
   // Parse PositiveSemidefiniteConstraint and LinearMatrixInequalityConstraint.
-  std::vector<int> psd_cone_length;
+  std::vector<std::optional<int>> psd_cone_length;
+  std::vector<std::optional<int>> lmi_cone_length;
+  std::vector<std::optional<int>> psd_y_start_indices;
+  std::vector<std::optional<int>> lmi_y_start_indices;
   internal::ParsePositiveSemidefiniteConstraints(
       prog, /* upper_triangular = */ false, &A_triplets, &b, &A_row_count,
-      &psd_cone_length);
+      &psd_cone_length, &lmi_cone_length, &psd_y_start_indices,
+      &lmi_y_start_indices);
   // Set the psd cone length in the SCS cone.
-  cone->ssize = psd_cone_length.size();
+  // Note that when psd_cone_length[i] = std::nullopt or lmi_cone_length[i] =
+  // std::nullopt, the constraint will not be parsed as PSD cone in SCS. So we
+  // should filter out these entries with value std::nullopt.
+  cone->ssize = 0;
+  for (const auto& length : psd_cone_length) {
+    if (length.has_value()) {
+      ++(cone->ssize);
+    }
+  }
+  for (const auto& length : lmi_cone_length) {
+    if (length.has_value()) {
+      cone->ssize++;
+    }
+  }
   // This scs_calloc doesn't need to accompany a ScopeExit since cone->s will be
   // cleaned up recursively by freeing up cone in scs_free_data()
   cone->s = static_cast<scs_int*>(scs_calloc(cone->ssize, sizeof(scs_int)));
-  for (int i = 0; i < cone->ssize; ++i) {
-    cone->s[i] = psd_cone_length[i];
+  int scs_psd_cone_count = 0;
+  for (int i = 0; i < ssize(psd_cone_length); ++i) {
+    if (psd_cone_length[i].has_value()) {
+      cone->s[scs_psd_cone_count++] = *(psd_cone_length[i]);
+    }
+  }
+  for (int i = 0; i < ssize(lmi_cone_length); ++i) {
+    if (lmi_cone_length[i].has_value()) {
+      cone->s[scs_psd_cone_count++] = *(lmi_cone_length[i]);
+    }
   }
 
   // Parse ExponentialConeConstraint.
@@ -588,15 +623,38 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
   A.setFromTriplets(A_triplets.begin(), A_triplets.end());
   A.makeCompressed();
 
+  // Set the parameters to default values.
+  scs_set_default_settings(scs_stgs);
+  // Customize the defaults for Drake:
+  // - SCS 3.0 uses 1E-4 as the default value, see
+  //   https://www.cvxgrp.org/scs/api/settings.html?highlight=eps_abs). This
+  //   tolerance is too loose. We set the default tolerance to 1E-5 for better
+  //   accuracy.
+  scs_stgs->eps_abs = 1E-5;
+  // - SCS 3.0 uses 1E-4 as the default value, see
+  //   https://www.cvxgrp.org/scs/api/settings.html?highlight=eps_rel). This
+  //   tolerance is too loose. We set the default tolerance to 1E-5 for better
+  //   accuracy.
+  scs_stgs->eps_rel = 1E-5;
+  // Apply the user's additional custom options (if any).
+  options->Respell([&](const auto& common, auto* respelled) {
+    respelled->emplace("verbose", common.print_to_console ? 1 : 0);
+    // TODO(jwnimmer-tri) Handle common.print_file_name.
+    if (!common.standalone_reproduction_file_name.empty()) {
+      Eigen::SparseMatrix<double> P(num_x, num_x);
+      P.setFromTriplets(P_upper_triplets.begin(), P_upper_triplets.end());
+      WriteScsReproduction(common.standalone_reproduction_file_name, P,
+                           Eigen::Map<Eigen::VectorXd>(c.data(), num_x), A,
+                           Eigen::Map<Eigen::VectorXd>(b.data(), b.size()),
+                           *cone);
+    }
+    // SCS does not support setting the number of threads so we ignore the
+    // kMaxThreads option.
+  });
+  options->CopyToSerializableStruct(scs_stgs);
+
   SetScsProblemData(A_row_count, num_x, A, b, P_upper_triplets, c,
                     scs_problem_data);
-  std::unordered_map<std::string, int> input_solver_options_int =
-      merged_options.GetOptionsInt(id());
-  std::unordered_map<std::string, double> input_solver_options_double =
-      merged_options.GetOptionsDouble(id());
-  SetScsSettings(&input_solver_options_int,
-                 merged_options.get_print_to_console(), scs_stgs);
-  SetScsSettings(&input_solver_options_double, scs_stgs);
 
   ScsInfo scs_info{0};
 
@@ -638,7 +696,10 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
   internal::SetDualSolution(
       prog, solver_details.y, linear_constraint_dual_indices,
       linear_eq_y_start_indices, lorentz_cone_y_start_indices,
-      rotated_lorentz_cone_y_start_indices, result);
+      rotated_lorentz_cone_y_start_indices, psd_y_start_indices,
+      lmi_y_start_indices, scalar_psd_dual_indices, scalar_lmi_dual_indices,
+      twobytwo_psd_dual_start_indices, twobytwo_lmi_dual_start_indices,
+      /*upper_triangular_psd=*/false, result);
   // Set the solution_result enum and the optimal cost based on SCS status.
   if (solver_details.scs_status == SCS_SOLVED ||
       solver_details.scs_status == SCS_SOLVED_INACCURATE) {

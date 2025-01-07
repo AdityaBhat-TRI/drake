@@ -9,12 +9,13 @@ namespace drake {
 namespace solvers {
 namespace test {
 /// Test a trivial semidefinite problem.
-/// min S(0, 0) + S(1, 1)
+/// min S(0, 0) + S(1, 1) + S(2, 2)
 /// s.t S(1, 0) = 1
 ///     S is p.s.d
 /// The analytical solution is
-/// S = [1 1]
-///     [1 1]
+/// S = [1 1 0]
+///     [1 1 0]
+///     [0 0 0]
 void TestTrivialSDP(const SolverInterface& solver, double tol);
 
 // Solve a semidefinite programming problem.
@@ -66,7 +67,7 @@ void FindOuterEllipsoid(const SolverInterface& solver,
 //     C * x = d
 void SolveEigenvalueProblem(const SolverInterface& solver,
                             const std::optional<SolverOptions>& solver_options,
-                            double tol);
+                            double tol, bool check_dual);
 
 /// Solve an SDP with a second order cone constraint. This example is taken from
 /// https://docs.mosek.com/10.1/capi/tutorial-sdo-shared.html
@@ -87,13 +88,16 @@ void SolveSDPwithSecondOrderConeExample2(const SolverInterface& solver,
 
 /** Solve an SDP with two PSD constraint, where each PSD constraint has
  * duplicate entries and the two PSD matrix share a common variables.
- * min 2 * x0 + x2
- * s.t [x0 x1] is psd
- *     [x1 x0]
- *     [x0 x2] is psd
- *     [x2 x0]
+ * min 2 * x0 + x2 + x5
+ * s.t [x0 x1 x3] is psd
+ *     [x1 x0 x4]
+ *     [x3 x4 x5]
+ *
+ *     [x0 x2 x3] is psd
+ *     [x2 x0 x4]
+ *     [x3 x4 x5]
  *     x1 == 1
- * The optimal solution will be x = (1, 1, -1).
+ * The optimal solution will be x = (1, 1, -1, 0, 0, 0).
  */
 void SolveSDPwithOverlappingVariables(const SolverInterface& solver,
                                       double tol);
@@ -101,26 +105,101 @@ void SolveSDPwithOverlappingVariables(const SolverInterface& solver,
 /** Solve an SDP with quadratic cost and two PSD constraints, where each PSD
  * constraint has duplicate entries and the two PSD matrix share a common
  * variables.
- * min x0² + 2*x0 + x2
- * s.t ⎡x0 x1⎤ is psd
- *     ⎣x1 x0⎦
- *     ⎡x0 x2⎤ is psd
- *     ⎣x2 x0⎦
+ * min x0² + 2*x0 + x2 + x5
+ * s.t ⎡x0 x1 x3⎤ is psd
+ *     |x1 x0 x4|
+ *     ⎣x3 x4 x5⎦
+ *
+ *     ⎡x0 x2 x3⎤ is psd
+ *     |x2 x0 x4|
+ *     ⎣x3 x4 x5⎦
+ *
  *     x1 == 1
  *
- * The optimal solution will be x = (1, 1, -1).
+ * The optimal solution will be x = (1, 1, -1, 0, 0, 0).
  */
 void SolveSDPwithQuadraticCosts(const SolverInterface& solver, double tol);
 
 /**
  * Test a simple SDP with only PSD constraint and bounding box constraint.
- * min x1
- * s.t ⎡x0 x1⎤ is psd
- *     ⎣x1 x2⎦
+ * min x1 + x5
+ * s.t ⎡x0 x1 x3⎤ is psd
+ *     |x1 x2 x4|
+ *     ⎣x3 x4 x5⎦
  *     x0 <= 4
  *     x2 <= 1
  */
-void TestSDPDualSolution1(const SolverInterface& solver, double tol);
+void TestSDPDualSolution1(const SolverInterface& solver, double tol,
+                          double complementarity_tol = 5E-7);
+
+// A trivial semidefinite program
+// min S(0, 0)
+// s.t S is psd
+// where S is a 1x1 psd matrix
+// The analytical solution is S = [0]
+void TestTrivial1x1SDP(const SolverInterface& solver, double primal_tol,
+                       bool check_dual = true, double dual_tol = 1E-5);
+
+// A trivial semidefinite program
+// min S(0, 0) + S(1, 1)
+// s.t S(1, 0) = 1
+//     S is psd.
+// The analytical solution is
+// S = [1 1]
+//     [1 1]
+void TestTrivial2x2SDP(const SolverInterface& solver, double primal_tol,
+                       bool check_dual = true, double dual_tol = 1E-5);
+
+// A semidefinite program with both a 1x1 psd matrix and a 3x3 psd matrix
+// min x[1] + x[3] + x[4]
+// s.t [x(1)] is psd
+//     [x(0) x(1) x(3)]  is psd
+//     [x(1) x(2) x(4)]
+//     [x(3) x(4) x(5)]
+//     x[0] = 9
+//     x[2] = 1
+//     x[5] = 4
+void Test1x1with3x3SDP(const SolverInterface& solver, double primal_tol,
+                       bool check_dual = true, double dual_tol = 1E-5);
+
+// A semidefinite program with both a 2x2 psd matrix and a 3x3 psd matrix
+// min x[1] + x[2] + x[4]
+// s.t [x[0] x[1]] is psd
+//     [x[1] x[2]]
+//
+//     [x[0] x[1] x[2]]
+//     [x[1] x[3] x[4]] is psd
+//     [x[2] x[4] x[2]]
+//     x[0] = 1
+//     x[3] = 1
+// Notice that the psd matrices share variables.
+void Test2x2with3x3SDP(const SolverInterface& solver, double primal_tol,
+                       bool check_dual = true, double dual_tol = 1E-5);
+
+// Test LMI constraints on 1x1 matrices (scalar).
+// min x(0) + x(1)
+// s.t [1] + x(0) * [2] + x(1) * [-3] is psd
+//     [-3] + x(0) * [-1] + x(1) * [-3] is psd
+//     [4] + x(0) * [1] + x(1) * [2] is psd
+void TestTrivial1x1LMI(const SolverInterface& solver, double primal_tol,
+                       bool check_dual, double dual_tol);
+
+// Test LMI constraints on 2x2 matrices.
+// min x(0)
+// s.t [1, 1] + [2, 2] * x(0) is psd.
+//     [1, -2]  [2, 8]
+void Test2x2LMI(const SolverInterface& solver, double primal_tol,
+                bool check_dual, double dual_tol);
+
+// min trace(X)
+// s.t X[0, 1] >= 1
+//     X is psd
+//     X is hankel.
+// Since X is hankel, some of its entries contain repeated variables. This test
+// is reported from github issue
+// https://github.com/RobotLocomotion/drake/issues/22158
+void TestHankel(const SolverInterface& solver, double primal_tol,
+                bool check_dual, double dual_tol);
 }  // namespace test
 }  // namespace solvers
 }  // namespace drake

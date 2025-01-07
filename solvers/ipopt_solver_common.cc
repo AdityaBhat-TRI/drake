@@ -8,14 +8,14 @@
 namespace drake {
 namespace solvers {
 
-IpoptSolver::IpoptSolver()
-    : SolverBase(id(), &is_available, &is_enabled,
-                 &ProgramAttributesSatisfied) {}
-
 IpoptSolver::~IpoptSolver() = default;
 
+void IpoptSolver::SetDefaultLinearSolver(std::string linear_solver) {
+  default_linear_solver_ = std::move(linear_solver);
+}
+
 SolverId IpoptSolver::id() {
-  static const never_destroyed<SolverId> singleton{"IPOPT"};
+  static const never_destroyed<SolverId> singleton{"Ipopt"};
   return singleton.access();
 }
 

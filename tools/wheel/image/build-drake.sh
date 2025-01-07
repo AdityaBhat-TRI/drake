@@ -16,13 +16,15 @@ cat > /opt/drake-wheel-build/drake-build/drake.bazelrc << EOF
 build --disk_cache=/var/cache/bazel/disk_cache
 build --repository_cache=/var/cache/bazel/repository_cache
 build --repo_env=DRAKE_OS=manylinux
-build --repo_env=SNOPT_PATH=git
+build --repo_env=SNOPT_PATH=${SNOPT_PATH}
 build --config=packaging
 build --define=LCM_INSTALL_JAVA=OFF
 EOF
 
 # Install Drake using our wheel-build-specific Python interpreter.
 cmake ../drake \
+    -DDRAKE_VERSION_OVERRIDE="${DRAKE_VERSION}" \
+    -DDRAKE_GIT_SHA_OVERRIDE="${DRAKE_GIT_SHA}" \
     -DCMAKE_INSTALL_PREFIX=/opt/drake \
     -DPython_EXECUTABLE=/usr/local/bin/python
 make install

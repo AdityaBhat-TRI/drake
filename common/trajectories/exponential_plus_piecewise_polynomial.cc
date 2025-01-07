@@ -1,5 +1,7 @@
 #include "drake/common/trajectories/exponential_plus_piecewise_polynomial.h"
 
+#if DRAKE_ONCE_PER_SCALAR_PHASE == 0  // We are @tparam_double_only.
+
 #include <memory>
 
 #include <unsupported/Eigen/MatrixFunctions>
@@ -22,20 +24,8 @@ ExponentialPlusPiecewisePolynomial<T>::ExponentialPlusPiecewisePolynomial(
 }
 
 template <typename T>
-std::unique_ptr<Trajectory<T>> ExponentialPlusPiecewisePolynomial<T>::Clone()
-    const {
-  return std::make_unique<ExponentialPlusPiecewisePolynomial<T>>(*this);
-}
-
-template <typename T>
-MatrixX<T> ExponentialPlusPiecewisePolynomial<T>::value(const T& t) const {
-  int segment_index = this->get_segment_index(t);
-  MatrixX<T> ret = piecewise_polynomial_part_.value(t);
-  double tj = this->start_time(segment_index);
-  auto exponential = (A_ * (t - tj)).eval().exp().eval();
-  ret.noalias() += K_ * exponential * alpha_.col(segment_index);
-  return ret;
-}
+ExponentialPlusPiecewisePolynomial<T>::~ExponentialPlusPiecewisePolynomial() =
+    default;
 
 template <typename T>
 ExponentialPlusPiecewisePolynomial<T>
@@ -53,16 +43,6 @@ ExponentialPlusPiecewisePolynomial<T>::derivative(int derivative_order) const {
 }
 
 template <typename T>
-Eigen::Index ExponentialPlusPiecewisePolynomial<T>::rows() const {
-  return piecewise_polynomial_part_.rows();
-}
-
-template <typename T>
-Eigen::Index ExponentialPlusPiecewisePolynomial<T>::cols() const {
-  return piecewise_polynomial_part_.cols();
-}
-
-template <typename T>
 void ExponentialPlusPiecewisePolynomial<T>::shiftRight(double offset) {
   std::vector<double>& breaks = this->get_mutable_breaks();
   for (auto it = breaks.begin(); it != breaks.end(); ++it) {
@@ -71,7 +51,35 @@ void ExponentialPlusPiecewisePolynomial<T>::shiftRight(double offset) {
   piecewise_polynomial_part_.shiftRight(offset);
 }
 
+template <typename T>
+std::unique_ptr<Trajectory<T>> ExponentialPlusPiecewisePolynomial<T>::DoClone()
+    const {
+  return std::make_unique<ExponentialPlusPiecewisePolynomial<T>>(*this);
+}
+
+template <typename T>
+MatrixX<T> ExponentialPlusPiecewisePolynomial<T>::do_value(const T& t) const {
+  int segment_index = this->get_segment_index(t);
+  MatrixX<T> ret = piecewise_polynomial_part_.value(t);
+  double tj = this->start_time(segment_index);
+  auto exponential = (A_ * (t - tj)).eval().exp().eval();
+  ret.noalias() += K_ * exponential * alpha_.col(segment_index);
+  return ret;
+}
+
+template <typename T>
+Eigen::Index ExponentialPlusPiecewisePolynomial<T>::do_rows() const {
+  return piecewise_polynomial_part_.rows();
+}
+
+template <typename T>
+Eigen::Index ExponentialPlusPiecewisePolynomial<T>::do_cols() const {
+  return piecewise_polynomial_part_.cols();
+}
+
 template class ExponentialPlusPiecewisePolynomial<double>;
 
 }  // namespace trajectories
 }  // namespace drake
+
+#endif

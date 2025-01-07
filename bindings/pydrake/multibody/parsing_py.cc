@@ -1,5 +1,6 @@
 #include "drake/bindings/pydrake/common/deprecation_pybind.h"
 #include "drake/bindings/pydrake/common/serialize_pybind.h"
+#include "drake/bindings/pydrake/common/sorted_pair_pybind.h"
 #include "drake/bindings/pydrake/documentation_pybind.h"
 #include "drake/bindings/pydrake/pydrake_pybind.h"
 #include "drake/multibody/parsing/package_map.h"
@@ -23,6 +24,25 @@ PYBIND11_MODULE(parsing, m) {
   constexpr auto& doc = pydrake_doc.drake.multibody;
 
   py::module::import("pydrake.common.schema");
+  py::module::import("pydrake.multibody.tree");
+
+  // CollisionFilterGroups
+  {
+    using Class = CollisionFilterGroups;
+    constexpr auto& cls_doc = doc.CollisionFilterGroups;
+    auto cls = py::class_<Class>(m, "CollisionFilterGroups", cls_doc.doc);
+    cls  // BR
+        .def(py::init<>(), cls_doc.ctor.doc)
+        .def("AddGroup", &Class::AddGroup, py::arg("name"), py::arg("members"),
+            cls_doc.AddGroup.doc)
+        .def("AddExclusionPair", &Class::AddExclusionPair, py::arg("pair"),
+            cls_doc.AddExclusionPair.doc)
+        .def("empty", &Class::empty, cls_doc.empty.doc)
+        .def("groups", &Class::groups, cls_doc.groups.doc)
+        .def("exclusion_pairs", &Class::exclusion_pairs,
+            cls_doc.exclusion_pairs.doc)
+        .def("__str__", &Class::to_string, cls_doc.to_string.doc);
+  }
 
   // PackageMap
   {
@@ -91,8 +111,9 @@ PYBIND11_MODULE(parsing, m) {
         .def(py::init<MultibodyPlant<double>*, std::string_view>(),
             py::arg("plant"), py::arg("model_name_prefix"),
             cls_doc.ctor.doc_2args_plant_model_name_prefix)
-        .def("plant", &Class::plant, py_rvp::reference_internal,
-            cls_doc.plant.doc)
+        .def("plant", &Class::plant, py_rvp::reference, cls_doc.plant.doc)
+        .def("scene_graph", &Class::scene_graph, py_rvp::reference,
+            cls_doc.scene_graph.doc)
         .def("package_map", &Class::package_map, py_rvp::reference_internal,
             cls_doc.package_map.doc)
         .def(
@@ -121,7 +142,9 @@ PYBIND11_MODULE(parsing, m) {
         .def("SetAutoRenaming", &Class::SetAutoRenaming, py::arg("value"),
             cls_doc.SetAutoRenaming.doc)
         .def("GetAutoRenaming", &Class::GetAutoRenaming,
-            cls_doc.GetAutoRenaming.doc);
+            cls_doc.GetAutoRenaming.doc)
+        .def("GetCollisionFilterGroups", &Class::GetCollisionFilterGroups,
+            cls_doc.GetCollisionFilterGroups.doc);
   }
 
   // Model Directives

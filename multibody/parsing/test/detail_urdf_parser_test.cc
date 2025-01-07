@@ -62,7 +62,8 @@ class UrdfParserTest : public test::DiagnosticPolicyTestBase {
                        &plant_, &resolver, NoSelect};
     auto result = AddModelFromUrdf(
         {DataSource::kFilename, &file_name}, model_name, {}, w);
-    resolver.Resolve(diagnostic_policy_);
+    last_parsed_groups_ = ConvertInstancedNamesToStrings(
+        resolver.Resolve(diagnostic_policy_), plant_);
     return result;
   }
 
@@ -74,7 +75,8 @@ class UrdfParserTest : public test::DiagnosticPolicyTestBase {
                        &plant_, &resolver, NoSelect};
     auto result = AddModelFromUrdf(
         {DataSource::kContents, &file_contents}, model_name, {}, w);
-    resolver.Resolve(diagnostic_policy_);
+    last_parsed_groups_ = ConvertInstancedNamesToStrings(
+        resolver.Resolve(diagnostic_policy_), plant_);
     return result;
   }
 
@@ -91,6 +93,7 @@ class UrdfParserTest : public test::DiagnosticPolicyTestBase {
   // Sap-specific features like the joint 'mimic' element.
   MultibodyPlant<double> plant_{0.1};
   SceneGraph<double> scene_graph_;
+  CollisionFilterGroupsImpl<std::string> last_parsed_groups_;
 };
 
 // Some tests contain deliberate typos to provoke parser errors or warnings. In
@@ -1861,6 +1864,8 @@ TEST_F(UrdfParserTest, CollisionFilterGroupParsingTest) {
   // Spot check that the two sets are separate.
   EXPECT_FALSE(inspector.CollisionFiltered(ids[1], ids[10]));
   EXPECT_FALSE(inspector.CollisionFiltered(ids[6], ids[7]));
+
+  EXPECT_FALSE(last_parsed_groups_.empty());
 
   // Make sure we can add the model a second time.
   AddModelFromUrdfFile(full_name, "model2");

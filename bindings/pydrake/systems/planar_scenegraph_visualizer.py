@@ -7,18 +7,17 @@ import matplotlib
 import matplotlib.cm as plt_cm
 import numpy as np
 import os
+from pathlib import Path
 
 from pydrake.common.deprecation import _warn_deprecated
 from pydrake.common.value import Value
 from pydrake.geometry import (
-    _MakeConvexHull,
     Box,
     Convex,
     Cylinder,
     HalfSpace,
     Mesh,
     QueryObject,
-    ReadObjToTriangleSurfaceMesh,
     Rgba,
     Role,
     Sphere,
@@ -97,9 +96,8 @@ class PlanarSceneGraphVisualizer(PyPlotVisualizer):
                 will be the same color.)
             substitute_collocated_mesh_files: If True, then a mesh file
                 specified with an unsupported filename extension may be
-                replaced by a file of the same base name in the same directory,
-                but with a supported filename extension.  Currently only .obj
-                files are supported.
+                replaced by a file of the same base name in the same
+                directory, but with a supported filename extension.
             ax: If supplied, the visualizer will draw onto those axes instead
                 of creating a new set of axes. The visualizer will still change
                 the view range and figure size of those axes.
@@ -245,30 +243,43 @@ class PlanarSceneGraphVisualizer(PyPlotVisualizer):
                          for pt in sample_pts])
 
                 elif isinstance(shape, (Mesh, Convex)):
-                    # Legacy behavior for looking for a .obj when the extension
-                    # is not recognized.
-                    filename = shape.filename()
-                    base, ext = os.path.splitext(filename)
-                    if (ext.lower() not in [".obj", ".vtk", ".gltf"]
-                            and substitute_collocated_mesh_files):
-                        # Check for a co-located .obj file (case insensitive).
-                        for f in glob.glob(base + '.*'):
-                            if f[-4:].lower() == '.obj':
-                                filename = f
-                                break
-                        if filename[-4:].lower() != '.obj':
-                            raise RuntimeError(
-                                f"The given file {filename} is not "
-                                f"supported and no alternate {base}"
-                                ".obj could be found.")
-                    if not os.path.exists(filename):
-                        raise FileNotFoundError(errno.ENOENT, os.strerror(
-                            errno.ENOENT), filename)
-                    temp_mesh = Mesh(filename, shape.scale())
-                    # TODO(21125): When Convex shape *always* has a
-                    # convex hull available, use it instead of recomputing it
-                    # here.
-                    convex_hull = _MakeConvexHull(temp_mesh)
+                    source = shape.source()
+                    search_for_alternate = (
+                        source.is_path() and substitute_collocated_mesh_files)
+                    convex_hull = None
+                    try:
+                        # For both shape types, we replace it with its convex
+                        # hull.
+                        convex_hull = shape.GetConvexHull()
+                    except RuntimeError as shape_error:
+                        known_suffixes = [".obj", ".vtk", ".gltf"]
+
+                        if source.extension() in known_suffixes:
+                            # The file was already of a known extension;
+                            # failure offers no recourse.
+                            raise shape_error
+
+                        if search_for_alternate:
+                            # For a path to an unknown file type, we can look
+                            # for a known alternative.
+                            for suffix in known_suffixes:
+                                alt_path = source.path().with_suffix(suffix)
+                                if alt_path.exists():
+                                    convex = Convex(alt_path, shape.scale())
+                                    convex_hull = convex.GetConvexHull()
+                                    break
+
+                    if convex_hull is None:
+                        # If we're here, we know:
+                        #   shape.source().extension() is not supported.
+                        #   We didn't/couldn't find a supported alternative.
+                        suffix = (" No supported alternative could be found."
+                                  if search_for_alternate else "")
+                        raise RuntimeError(
+                            f"The {type(shape).__name__} instance with mesh "
+                            f"data '{source.description()}' has an "
+                            f"unsupported extension ('{source.extension()}')."
+                            f"{suffix}")
                     patch_G = np.empty((3, convex_hull.num_vertices()))
                     for i in range(convex_hull.num_vertices()):
                         patch_G[:, i] = convex_hull.vertex(i)

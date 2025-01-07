@@ -11,10 +11,10 @@ filegroup(
     srcs = glob(
         [
             "bin/*.dylib",
-            "lib/*.dylib",
+            "lib/*.dylib*",
             "lib/rustlib/aarch64-apple-darwin/codegen-backends/*.dylib",
             "lib/rustlib/aarch64-apple-darwin/bin/rust-lld",
-            "lib/rustlib/aarch64-apple-darwin/lib/*.dylib",
+            "lib/rustlib/aarch64-apple-darwin/lib/*.dylib*",
         ],
         allow_empty = True,
     ),
@@ -32,12 +32,19 @@ filegroup(
     srcs = ["bin/clippy-driver"],
     visibility = ["//visibility:public"],
 )
+filegroup(
+    name = "cargo_clippy_bin",
+    srcs = ["bin/cargo-clippy"],
+    visibility = ["//visibility:public"],
+)
 
 filegroup(
     name = "cargo",
     srcs = ["bin/cargo"],
     visibility = ["//visibility:public"],
 )
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
 filegroup(
     name = "rustfmt_bin",
     srcs = ["bin/rustfmt"],
@@ -69,7 +76,7 @@ rust_stdlib_filegroup(
     srcs = glob(
         [
             "lib/rustlib/aarch64-apple-darwin/lib/*.rlib",
-            "lib/rustlib/aarch64-apple-darwin/lib/*.dylib",
+            "lib/rustlib/aarch64-apple-darwin/lib/*.dylib*",
             "lib/rustlib/aarch64-apple-darwin/lib/*.a",
             "lib/rustlib/aarch64-apple-darwin/lib/self-contained/**",
         ],
@@ -96,6 +103,7 @@ rust_toolchain(
     rustfmt = "//:rustfmt_bin",
     cargo = "//:cargo",
     clippy_driver = "//:clippy_driver_bin",
+    cargo_clippy = "//:cargo_clippy_bin",
     llvm_cov = "//:llvm_cov_bin",
     llvm_profdata = "//:llvm_profdata_bin",
     rustc_lib = "//:rustc_lib",
@@ -112,4 +120,5 @@ rust_toolchain(
     extra_rustc_flags = [],
     extra_exec_rustc_flags = [],
     opt_level = None,
+    tags = ["rust_version=1.83.0"],
 )

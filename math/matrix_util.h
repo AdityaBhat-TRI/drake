@@ -4,10 +4,13 @@
 #include <cmath>
 #include <functional>
 #include <set>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include <Eigen/Dense>
+#include <Eigen/SparseCore>
 
 #include "drake/common/drake_assert.h"
 #include "drake/common/drake_throw.h"
@@ -144,7 +147,7 @@ drake::VectorX<typename Derived::Scalar> ToLowerTriangularColumnsFromMatrix(
 }
 
 /// Checks if a matrix is symmetric (with tolerance @p symmetry_tolerance --
-/// @see IsSymmetric) and has all eigenvalues greater than @p
+/// see IsSymmetric) and has all eigenvalues greater than @p
 /// eigenvalue_tolerance.  @p eigenvalue_tolerance must be >= 0 -- where 0
 /// implies positive semi-definite (but is of course subject to all of the
 /// pitfalls of floating point).
@@ -211,9 +214,9 @@ template <typename Derived>
 MatrixX<typename Derived::Scalar> ExtractPrincipalSubmatrix(
     const Eigen::MatrixBase<Derived>& mat, const std::set<int>& indices) {
   DRAKE_THROW_UNLESS(!indices.empty());
-  // Stores the contiguous intervals of the index set of the minor. These
-  // intervals include the first index but exclude the last, i.e.
-  // [intervals[i][0], intervals[i][1]).
+  // Stores the contiguous intervals of the index set of the principal
+  // submatrix. These intervals include the first index but exclude the last,
+  // i.e. [intervals[i][0], intervals[i][1]).
   std::vector<std::pair<int, int>> intervals;
   auto it = indices.begin();
   int interval_start{*it};
@@ -249,6 +252,16 @@ MatrixX<typename Derived::Scalar> ExtractPrincipalSubmatrix(
   }
   return minor;
 }
+
+/// Returns the python statement to construct scipy.sparse matrix. The generated
+/// code will call sparse.csc_matrix() directly (please make sure you have
+/// imported the module through `from scipy import sparse`), and will end with a
+/// newline.
+/// @param mat The Eigen matrix to be generated to python code.
+/// @param name The name of the python variable for the sparse matrix.
+/// @returns the generated python code
+std::string GeneratePythonCsc(const Eigen::SparseMatrix<double>& mat,
+                              std::string_view name);
 
 }  // namespace math
 }  // namespace drake

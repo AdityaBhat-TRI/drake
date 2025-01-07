@@ -21,9 +21,9 @@ have sets_.size() == 0) is treated as the singleton {0}, which is nonempty.
 This includes the zero-dimensional case.
 
 @ingroup geometry_optimization */
-class MinkowskiSum final : public ConvexSet, private ShapeReifier {
+class MinkowskiSum final : public ConvexSet {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(MinkowskiSum)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(MinkowskiSum);
 
   /** Constructs a default (zero-dimensional, nonempty) set. */
   MinkowskiSum();
@@ -63,10 +63,19 @@ class MinkowskiSum final : public ConvexSet, private ShapeReifier {
   */
   using ConvexSet::PointInSet;
 
+  /** A MinkowskiSum is bounded if all its constituent sets are bounded or if
+  any are empty. This class honors requests for parallelism only so far as its
+  constituent sets do.
+  @param parallelism The maximum number of threads to use.
+  @note See @ref ConvexSet::IsBounded "parent class's documentation" for more
+  details. */
+  using ConvexSet::IsBounded;
+
  private:
   std::unique_ptr<ConvexSet> DoClone() const final;
 
-  std::optional<bool> DoIsBoundedShortcut() const final;
+  std::optional<bool> DoIsBoundedShortcutParallel(
+      Parallelism parallelism) const final;
 
   bool DoIsEmpty() const final;
 
@@ -100,10 +109,6 @@ class MinkowskiSum final : public ConvexSet, private ShapeReifier {
 
   std::pair<std::unique_ptr<Shape>, math::RigidTransformd> DoToShapeWithPose()
       const final;
-
-  // Implement support shapes for the ShapeReifier interface.
-  using ShapeReifier::ImplementGeometry;
-  void ImplementGeometry(const Capsule& capsule, void* data) final;
 
   ConvexSets sets_{};  // Not marked const to support move semantics.
 };

@@ -22,10 +22,9 @@ officially supports:
 | Operating System ⁽¹⁾               | Architecture | Python ⁽²⁾ | End of life ⁽⁴⁾ |
 |------------------------------------|--------------|------------|-----------------|
 | Ubuntu 22.04 LTS (Jammy Jellyfish) | x86_64       | 3.10 ⁽³⁾   | March 2026      |
-| Ubuntu 24.04 LTS (Noble Numbat)    | TBD ⁽⁵⁾      | TBD ⁽⁵⁾    | March 2028      |
-| macOS Monterey (12)                | x86_64       | 3.12       | October 2023    |
-| macOS Ventura (13)                 | arm64        | 3.12       | October 2024    |
-| macOS Sonoma (14)                  | arm64        | 3.12       | October 2025    |
+| Ubuntu 24.04 LTS (Noble Numbat)    | x86_64       | 3.12 ⁽³⁾   | March 2028      |
+| macOS Sonoma (14)                  | arm64        | 3.12 ⁽³⁾   | October 2025    |
+| macOS Sequoia (15)                 | arm64        | 3.12 ⁽³⁾   | October 2026    |
 
 "Official support" means that we have Continuous Integration test coverage to
 notice regressions, so if it doesn't work for you then please file a bug report.
@@ -55,8 +54,6 @@ timeline for changing which Python versions are supported.
 ⁽⁴⁾ These end-of-life dates are estimates.
 Refer to [OS Support](/stable.html#os-support) for details.
 
-⁽⁵⁾ We aim to support Ubuntu 24.04 within two months of its release.
-
 Additionally, if you are compiling your own C++ code against Drake's C++ code
 and are using Drake's pre-compiled binaries, then you must use the same
 compiler as our releases:
@@ -64,9 +61,9 @@ compiler as our releases:
 | Operating System                   | C/C++ Compiler           | Std   |
 |------------------------------------|--------------------------|-------|
 | Ubuntu 22.04 LTS (Jammy Jellyfish) | GCC 11                   | C++20 |
-| macOS Monterey (12)                | Apple LLVM 14 (Xcode 14) | C++20 |
-| macOS Ventura (13)                 | Apple LLVM 14 (Xcode 14) | C++20 |
-| macOS Sonoma (14)                  | Apple LLVM 14 (Xcode 15) | C++20 |
+| Ubuntu 24.04 LTS (Noble Numbat)    | GCC 13                   | C++20 |
+| macOS Sonoma (14)                  | Apple LLVM 16 (Xcode 16) | C++20 |
+| macOS Sequoia (15)                 | Apple LLVM 16 (Xcode 16) | C++20 |
 
 ## Available Versions
 
@@ -103,11 +100,6 @@ following the instructions in [Source Installation](/from_source.html).
 
 Drake's binary releases do not support the Gurobi solver.
 To use Gurobi, you must build Drake from source.
-
-We're considering adding macOS support for Homebrew, i.e., ``brew install
-drake``.  Please upvote or comment on
-[#12782](https://github.com/RobotLocomotion/drake/issues/12782)
-if you are interested.
 
 # Quickstart
 

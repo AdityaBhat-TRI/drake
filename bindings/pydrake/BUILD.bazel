@@ -1,3 +1,5 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
+load("//bindings/pydrake:stubgen.bzl", "generate_python_stubs")
 load("//tools/install:install.bzl", "install")
 load(
     "//tools/skylark:drake_cc.bzl",
@@ -18,8 +20,6 @@ load(
     "get_drake_py_installs",
     "get_pybind_package_info",
 )
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
-load("//bindings/pydrake:stubgen.bzl", "generate_python_stubs")
 load("//tools/workspace:generate_file.bzl", "generate_file")
 
 package(default_visibility = [
@@ -35,6 +35,7 @@ exports_files([
 PACKAGE_INFO = get_pybind_package_info(base_package = "//bindings")
 
 # This target provides the following Python modules:
+# - drake (i.e., our lcmtypes)
 # - pydrake
 # - pydrake.autodiffutils
 # - pydrake.common (and all of its sub-modules)
@@ -47,8 +48,8 @@ drake_py_library(
         "__init__.py",
     ],
     deps = [
-        "//bindings:bazel_workaround_4594_libdrake_py",
         "//bindings/pydrake/common:_init_py",
+        "//lcmtypes:lcmtypes_drake_py",
     ],
 )
 
@@ -350,7 +351,6 @@ drake_py_unittest(
     name = "lcm_test",
     deps = [
         ":lcm_py",
-        "//lcmtypes:lcmtypes_drake_py",
     ],
 )
 
@@ -373,6 +373,7 @@ drake_py_unittest(
     name = "trajectories_test",
     deps = [
         ":trajectories_py",
+        "//bindings/pydrake/common/test_utilities:deprecation_py",
         "//bindings/pydrake/common/test_utilities:numpy_compare_py",
         "//bindings/pydrake/common/test_utilities:pickle_compare_py",
         "//bindings/pydrake/common/test_utilities:scipy_stub_py",
@@ -391,6 +392,20 @@ drake_py_unittest(
         "//:.clang-format",
     ],
     tags = ["lint"],
+)
+
+drake_py_unittest(
+    name = "memory_leak_test",
+    data = [
+        "@drake_models//:iiwa_description",
+        "@drake_models//:manipulation_station",
+        "@drake_models//:veggies",
+        "@drake_models//:wsg_50_description",
+    ],
+    deps = [
+        ":all_py",
+        "//bindings/pydrake/common/test_utilities",
+    ],
 )
 
 drake_py_binary(
@@ -438,6 +453,7 @@ PYI_FILES = [
     "pydrake/symbolic.pyi",
     "pydrake/systems/analysis.pyi",
     "pydrake/systems/controllers.pyi",
+    "pydrake/systems/estimators.pyi",
     "pydrake/systems/framework.pyi",
     "pydrake/systems/lcm.pyi",
     "pydrake/systems/primitives.pyi",
@@ -478,8 +494,8 @@ drake_py_unittest(
         ":pydrake_typed",
     ],
     deps = [
-        "@bazel_tools//tools/python/runfiles",
         "@mypy_internal//:mypy",
+        "@rules_python//python/runfiles",
     ],
 )
 
@@ -495,7 +511,7 @@ install(
         ":pydrake_pyi",
         ":pydrake_typed",
     ],
-    data_dest = "@PYTHON_SITE_PACKAGES@",
+    data_dest = "lib/python@PYTHON_VERSION@/site-packages",
     visibility = ["//visibility:public"],
     deps = get_drake_py_installs(PY_LIBRARIES_WITH_INSTALL) + [
         # These three modules are a special case.

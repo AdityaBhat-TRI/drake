@@ -7,6 +7,7 @@
 #include "drake/bindings/pydrake/common/serialize_pybind.h"
 #include "drake/bindings/pydrake/common/value_pybind.h"
 #include "drake/bindings/pydrake/documentation_pybind.h"
+#include "drake/bindings/pydrake/geometry/geometry_py.h"
 #include "drake/geometry/render/light_parameter.h"
 #include "drake/geometry/render/render_engine.h"
 #include "drake/geometry/render/render_label.h"
@@ -28,8 +29,6 @@ using geometry::render::LightType;
 using geometry::render::RenderEngine;
 using math::RigidTransformd;
 using systems::sensors::CameraInfo;
-using systems::sensors::ColorD;
-using systems::sensors::ColorI;
 using systems::sensors::Image;
 using systems::sensors::ImageDepth32F;
 using systems::sensors::ImageLabel16I;
@@ -92,10 +91,7 @@ class PyRenderEngine : public py::wrapper<RenderEngine> {
   // Expose these protected methods (which are either virtual methods with
   // default implementations, or helper functions) so that Python
   // implementations can access them.
-  using Base::GetColorDFromLabel;
-  using Base::GetColorIFromLabel;
   using Base::GetRenderLabelOrThrow;
-  using Base::LabelFromColor;
   using Base::SetDefaultLightPosition;
 
   template <typename ImageType>
@@ -126,6 +122,34 @@ void DoScalarIndependentDefinitions(py::module m) {
             cls_doc.far.doc)
         .def("near", static_cast<double (Class::*)() const>(&Class::near),
             cls_doc.near.doc);
+  }
+  {
+    using Class = RenderCameraCore;
+    const auto& cls_doc = doc.RenderCameraCore;
+    py::class_<Class> cls(m, "RenderCameraCore");
+    cls  // BR
+        .def(py::init<Class const&>(), py::arg("other"), "Copy constructor")
+        .def(
+            py::init<std::string, CameraInfo, ClippingRange, RigidTransformd>(),
+            py::arg("renderer_name"), py::arg("intrinsics"),
+            py::arg("clipping"), py::arg("X_BS"), cls_doc.ctor.doc)
+        .def("clipping",
+            static_cast<ClippingRange const& (Class::*)() const>(
+                &Class::clipping),
+            cls_doc.clipping.doc)
+        .def("intrinsics",
+            static_cast<CameraInfo const& (Class::*)() const>(
+                &Class::intrinsics),
+            cls_doc.intrinsics.doc)
+        .def("renderer_name",
+            static_cast<::std::string const& (Class::*)() const>(
+                &Class::renderer_name),
+            cls_doc.renderer_name.doc)
+        .def("sensor_pose_in_camera_body",
+            static_cast<RigidTransformd const& (Class::*)() const>(
+                &Class::sensor_pose_in_camera_body),
+            cls_doc.sensor_pose_in_camera_body.doc);
+    DefCopyAndDeepCopy(&cls);
   }
   {
     using Class = ColorRenderCamera;
@@ -178,33 +202,45 @@ void DoScalarIndependentDefinitions(py::module m) {
             cls_doc.depth_range.doc);
     DefCopyAndDeepCopy(&cls);
   }
+
   {
-    using Class = RenderCameraCore;
-    const auto& cls_doc = doc.RenderCameraCore;
-    py::class_<Class> cls(m, "RenderCameraCore");
-    cls  // BR
-        .def(py::init<Class const&>(), py::arg("other"), "Copy constructor")
-        .def(
-            py::init<std::string, CameraInfo, ClippingRange, RigidTransformd>(),
-            py::arg("renderer_name"), py::arg("intrinsics"),
-            py::arg("clipping"), py::arg("X_BS"), cls_doc.ctor.doc)
-        .def("clipping",
-            static_cast<ClippingRange const& (Class::*)() const>(
-                &Class::clipping),
-            cls_doc.clipping.doc)
-        .def("intrinsics",
-            static_cast<CameraInfo const& (Class::*)() const>(
-                &Class::intrinsics),
-            cls_doc.intrinsics.doc)
-        .def("renderer_name",
-            static_cast<::std::string const& (Class::*)() const>(
-                &Class::renderer_name),
-            cls_doc.renderer_name.doc)
-        .def("sensor_pose_in_camera_body",
-            static_cast<RigidTransformd const& (Class::*)() const>(
-                &Class::sensor_pose_in_camera_body),
-            cls_doc.sensor_pose_in_camera_body.doc);
-    DefCopyAndDeepCopy(&cls);
+    py::class_<RenderLabel> render_label(m, "RenderLabel", doc.RenderLabel.doc);
+    render_label
+        .def(py::init<int>(), py::arg("value"), doc.RenderLabel.ctor.doc_1args)
+        .def("is_reserved", &RenderLabel::is_reserved)
+        .def("__int__", [](const RenderLabel& self) -> int { return self; })
+        .def("__repr__",
+            [](const RenderLabel& self) -> std::string {
+              if (self == RenderLabel::kEmpty) {
+                return "RenderLabel.kEmpty";
+              }
+              if (self == RenderLabel::kDoNotRender) {
+                return "RenderLabel.kDoNotRender";
+              }
+              if (self == RenderLabel::kDontCare) {
+                return "RenderLabel.kDontCare";
+              }
+              if (self == RenderLabel::kUnspecified) {
+                return "RenderLabel.kUnspecified";
+              }
+              if (self == RenderLabel::kMaxUnreserved) {
+                return "RenderLabel.kMaxUnreserved";
+              }
+              return fmt::format("RenderLabel({})", int{self});
+            })
+        // EQ(==).
+        .def(py::self == py::self)
+        .def(py::self == int{})
+        .def(int{} == py::self)
+        // NE(!=).
+        .def(py::self != py::self)
+        .def(py::self != int{})
+        .def(int{} != py::self);
+    render_label.attr("kEmpty") = RenderLabel::kEmpty;
+    render_label.attr("kDoNotRender") = RenderLabel::kDoNotRender;
+    render_label.attr("kDontCare") = RenderLabel::kDontCare;
+    render_label.attr("kUnspecified") = RenderLabel::kUnspecified;
+    render_label.attr("kMaxUnreserved") = RenderLabel::kMaxUnreserved;
   }
 
   {
@@ -287,64 +323,6 @@ void DoScalarIndependentDefinitions(py::module m) {
     // Note that we do not bind MakeRgbFromLabel nor MakeLabelFromRgb, because
     // crossing the C++ <=> Python boundary one pixel at a time would be
     // extraordinarily inefficient.
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-    // To be removed on 2024-05-01.
-    cls  // BR
-        .def_static("LabelFromColor",
-            static_cast<RenderLabel (*)(ColorI const&)>(
-                &PyRenderEngine::LabelFromColor),
-            py::arg("color"))
-        .def_static("GetColorIFromLabel",
-            static_cast<ColorI (*)(RenderLabel const&)>(
-                &PyRenderEngine::GetColorIFromLabel),
-            py::arg("label"))
-        .def_static("GetColorDFromLabel",
-            static_cast<ColorD (*)(RenderLabel const&)>(
-                &PyRenderEngine::GetColorDFromLabel),
-            py::arg("label"));
-#pragma GCC diagnostic pop
-  }
-
-  {
-    py::class_<RenderLabel> render_label(m, "RenderLabel", doc.RenderLabel.doc);
-    render_label
-        .def(py::init<int>(), py::arg("value"), doc.RenderLabel.ctor.doc_1args)
-        .def("is_reserved", &RenderLabel::is_reserved)
-        .def("__int__", [](const RenderLabel& self) -> int { return self; })
-        .def("__repr__",
-            [](const RenderLabel& self) -> std::string {
-              if (self == RenderLabel::kEmpty) {
-                return "RenderLabel.kEmpty";
-              }
-              if (self == RenderLabel::kDoNotRender) {
-                return "RenderLabel.kDoNotRender";
-              }
-              if (self == RenderLabel::kDontCare) {
-                return "RenderLabel.kDontCare";
-              }
-              if (self == RenderLabel::kUnspecified) {
-                return "RenderLabel.kUnspecified";
-              }
-              if (self == RenderLabel::kMaxUnreserved) {
-                return "RenderLabel.kMaxUnreserved";
-              }
-              return fmt::format("RenderLabel({})", int{self});
-            })
-        // EQ(==).
-        .def(py::self == py::self)
-        .def(py::self == int{})
-        .def(int{} == py::self)
-        // NE(!=).
-        .def(py::self != py::self)
-        .def(py::self != int{})
-        .def(int{} != py::self);
-    render_label.attr("kEmpty") = RenderLabel::kEmpty;
-    render_label.attr("kDoNotRender") = RenderLabel::kDoNotRender;
-    render_label.attr("kDontCare") = RenderLabel::kDontCare;
-    render_label.attr("kUnspecified") = RenderLabel::kUnspecified;
-    render_label.attr("kMaxUnreserved") = RenderLabel::kMaxUnreserved;
   }
 
   {
@@ -373,6 +351,17 @@ void DoScalarIndependentDefinitions(py::module m) {
     using Class = geometry::EnvironmentMap;
     constexpr auto& cls_doc = doc_geometry.EnvironmentMap;
     py::class_<Class> cls(m, "EnvironmentMap", cls_doc.doc);
+    cls  // BR
+        .def(ParamInit<Class>());
+    DefAttributesUsingSerialize(&cls);
+    DefReprUsingSerialize(&cls);
+    DefCopyAndDeepCopy(&cls);
+  }
+
+  {
+    using Class = geometry::GltfExtension;
+    constexpr auto& cls_doc = doc_geometry.GltfExtension;
+    py::class_<Class> cls(m, "GltfExtension", cls_doc.doc);
     cls  // BR
         .def(ParamInit<Class>());
     DefAttributesUsingSerialize(&cls);

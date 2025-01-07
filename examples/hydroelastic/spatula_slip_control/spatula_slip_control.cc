@@ -76,7 +76,7 @@ namespace {
 // dimensional signal, but we will use a 2-dimensional signal for our gripper.
 class Square final : public systems::LeafSystem<double> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Square)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Square);
 
   // Constructs a %Square system where different amplitudes, duty cycles,
   // periods, and phases can be applied to each square wave.
@@ -146,10 +146,10 @@ int DoMain() {
   // Parse the gripper and spatula models.
   multibody::Parser parser(&plant, &scene_graph);
   parser.AddModelsFromUrl(
-      "package://drake/examples/hydroelastic/spatula_slip_control/models/"
+      "package://drake_models/wsg_50_description/sdf/"
       "schunk_wsg_50_hydro_bubble.sdf");
   parser.AddModelsFromUrl(
-      "package://drake/examples/hydroelastic/spatula_slip_control/models/"
+      "package://drake/examples/hydroelastic/spatula_slip_control/"
       "spatula.sdf");
   // Pose the gripper and weld it to the world.
   const math::RigidTransform<double> X_WF0 = math::RigidTransform<double>(

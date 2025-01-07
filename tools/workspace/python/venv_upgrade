@@ -1,0 +1,67 @@
+#!/bin/bash
+#
+# Drake script to upgrade our requirements lockfile.
+# - Users should make edits to pyproject.toml, and then
+# - run this script to compile pyproject.toml to pdm.lock.
+
+set -eux -o pipefail
+
+commit=
+files_to_commit=()
+while [ "${1:-}" != "" ]; do
+    case "$1" in
+        --commit)
+            commit=1
+            ;;
+        *)
+            echo "Invalid command line argument, $1." >&2
+            exit 5
+    esac
+    shift
+done
+
+check_working_tree() {
+    paths_modified=($(
+        (git status --untracked-files=no --porcelain=v1 -- . || true) | \
+        (grep -vE '^.. pdm.lock$' || true)))
+    if [ ${#paths_modified[@]} != 0 ]; then
+        git status --untracked-files=no .
+        set +x
+        echo >&2
+        echo "Refusing to proceed while your working tree is dirty." >&2
+        echo "Commit your changes first or run without --commit." >&2
+        exit 1
+    fi
+}
+
+# Chdir to the Drake root.
+cd "$(dirname $0)/../../.."
+readonly drake_python="$(bazel info output_base).drake_python"
+readonly project="${drake_python}/project"
+readonly venv_pdm="${drake_python}/venv.pdm"
+
+# If committing, check that the working tree is clean (enough). Note that the
+# lock file is ignored.
+[ -z "${commit}" ] || check_working_tree
+
+# Ensure venv exists.
+bazel fetch @python --force
+
+# Remove and recreate the lock file.
+readonly lockfile="./setup/python/pdm.lock"
+rm -f "${lockfile}"
+"${venv_pdm}/bin/pdm" lock -p "${project}" -L "${lockfile}"
+files_to_commit+=($(git diff --name-only HEAD -- "${lockfile}"))
+
+# If committing, do the commit.
+if [ -n "${commit}" ]; then
+    if [ ${#files_to_commit[@]} == 0 ]; then
+        set +x
+        echo
+        echo "No changes need to be committed."
+        exit 0
+    fi
+
+    message="[setup] Upgrade Python venv to latest"
+    git commit -m "${message}" -o "${files_to_commit[@]}"
+fi

@@ -3,11 +3,11 @@ import typing
 
 import numpy as np
 import scipy.sparse
+import copy
 
 import pydrake.solvers as mp
 import pydrake.symbolic as sym
 from pydrake.autodiffutils import InitializeAutoDiff
-from pydrake.common.test_utilities.deprecation import catch_drake_warnings
 
 
 class TestCost(unittest.TestCase):
@@ -17,6 +17,16 @@ class TestCost(unittest.TestCase):
         cost = mp.LinearCost(a, b)
         np.testing.assert_allclose(cost.a(), a)
         self.assertEqual(cost.b(), b)
+        cost.UpdateCoefficients(new_a=[2, 3.], new_b=1)
+        np.testing.assert_allclose(cost.a(), [2, 3.])
+        self.assertEqual(cost.b(), 1)
+
+        cost.update_coefficient_entry(i=0, val=4)
+        np.testing.assert_allclose(cost.a(), [4, 3])
+        self.assertEqual(cost.b(), 1)
+
+        cost.update_constant_term(new_b=2)
+        self.assertEqual(cost.b(), 2)
 
     def test_quadratic_cost(self):
         Q = np.array([[1., 2.], [2., 3.]])
@@ -34,6 +44,28 @@ class TestCost(unittest.TestCase):
         cost = mp.QuadraticCost(np.array([[1., 2.], [2., 6.]]), b, c)
         self.assertTrue(cost.is_convex())
 
+        cost.UpdateCoefficients(
+            new_Q=np.array([[1, 3], [3, 6.]]),
+            new_b=np.array([2, 4.]),
+            new_c=1,
+            is_convex=False
+        )
+        np.testing.assert_allclose(cost.Q(), np.array([[1, 3], [3, 6]]))
+        np.testing.assert_allclose(cost.b(), np.array([2, 4.]))
+        self.assertEqual(cost.c(), 1)
+
+        cost.UpdateHessianEntry(i=0, j=1, val=1, is_hessian_psd=None)
+        np.testing.assert_allclose(cost.Q(), np.array([[1, 1], [1, 6]]))
+        self.assertTrue(cost.is_convex())
+        cost.update_linear_coefficient_entry(i=1, val=5)
+        np.testing.assert_allclose(cost.b(), np.array([2, 5.]))
+        cost.update_constant_term(new_c=2)
+        self.assertEqual(cost.c(), 2)
+
+        # User-specify is_hessian_psd.
+        cost.UpdateHessianEntry(i=0, j=0, val=20, is_hessian_psd=True)
+        self.assertTrue(cost.is_convex())
+
     def test_l1norm_cost(self):
         A = np.array([[1., 2.], [-.4, .7]])
         b = np.array([0.5, -.4])
@@ -43,15 +75,19 @@ class TestCost(unittest.TestCase):
         cost.UpdateCoefficients(new_A=2*A, new_b=2*b)
         np.testing.assert_allclose(cost.A(), 2*A)
         np.testing.assert_allclose(cost.b(), 2*b)
+        cost.update_A_entry(i=0, j=1, val=0.5)
+        np.testing.assert_allclose(cost.A(), np.array([[2, 0.5], [-0.8, 1.4]]))
+        cost.update_b_entry(i=0, val=1)
+        np.testing.assert_allclose(cost.b(), np.array([1, -0.8]))
 
     def test_l2norm_cost(self):
         A = np.array([[1., 2.], [-.4, .7]])
         b = np.array([0.5, -.4])
         cost = mp.L2NormCost(A=A, b=b)
-        np.testing.assert_allclose(cost.A(), A)
+        np.testing.assert_allclose(cost.get_sparse_A().todense(), A)
+        np.testing.assert_allclose(cost.GetDenseA(), A)
         np.testing.assert_allclose(cost.b(), b)
         cost.UpdateCoefficients(new_A=2*A, new_b=2*b)
-        np.testing.assert_allclose(cost.A(), 2*A)
         np.testing.assert_allclose(cost.b(), 2*b)
 
     def test_linfnorm_cost(self):
@@ -63,6 +99,10 @@ class TestCost(unittest.TestCase):
         cost.UpdateCoefficients(new_A=2*A, new_b=2*b)
         np.testing.assert_allclose(cost.A(), 2*A)
         np.testing.assert_allclose(cost.b(), 2*b)
+        cost.update_A_entry(i=0, j=1, val=0.5)
+        np.testing.assert_allclose(cost.A(), np.array([[2, 0.5], [-0.8, 1.4]]))
+        cost.update_b_entry(i=0, val=1)
+        np.testing.assert_allclose(cost.b(), np.array([1, -0.8]))
 
     def test_perspective_quadratic_cost(self):
         A = np.array([[1., 2.], [-.4, .7]])
@@ -73,6 +113,10 @@ class TestCost(unittest.TestCase):
         cost.UpdateCoefficients(new_A=2*A, new_b=2*b)
         np.testing.assert_allclose(cost.A(), 2*A)
         np.testing.assert_allclose(cost.b(), 2*b)
+        cost.update_A_entry(i=0, j=1, val=0.5)
+        np.testing.assert_allclose(cost.A(), np.array([[2, 0.5], [-0.8, 1.4]]))
+        cost.update_b_entry(i=0, val=1)
+        np.testing.assert_allclose(cost.b(), np.array([1, -0.8]))
 
     def test_expression_cost(self):
         x = sym.Variable("x")
@@ -91,6 +135,56 @@ class TestCost(unittest.TestCase):
                          "(y + \\sin{x})")
         binding = mp.Binding[mp.ExpressionCost](cost, cost.vars())
         self.assertEqual(binding.ToLatex(precision=1), "(y + \\sin{x})")
+
+    def test_binding_eq(self):
+        x = sym.Variable("x")
+        y = sym.Variable("y")
+        z = sym.Variable("z")
+        e1 = np.sin(x) + y
+        e2 = np.cos(x) + y
+        e3 = np.sin(z) + y
+
+        cost1 = mp.ExpressionCost(e=e1)
+        cost1_binding1 = mp.Binding[mp.ExpressionCost](cost1, cost1.vars())
+        cost1_binding2 = mp.Binding[mp.ExpressionCost](cost1, cost1.vars())
+
+        cost2 = mp.ExpressionCost(e=e2)
+        cost2_binding = mp.Binding[mp.ExpressionCost](cost2, cost2.vars())
+
+        cost3 = mp.ExpressionCost(e=e3)
+        cost3_binding = mp.Binding[mp.ExpressionCost](cost3, cost3.vars())
+
+        self.assertTrue(cost1_binding1 == cost1_binding1)
+        self.assertTrue(cost1_binding1 == cost1_binding2)
+        self.assertEqual(cost1_binding1, cost1_binding2)
+
+        # The bindings have the same variables but different expressions.
+        self.assertNotEqual(cost1_binding1, cost2_binding)
+        # The bindings have the same expression but different variables.
+        self.assertNotEqual(cost1_binding1, cost3_binding)
+
+    def test_binding_hash(self):
+        x = sym.Variable("x")
+        y = sym.Variable("y")
+        e = np.log(2*x) + y**2
+        e2 = y
+
+        cost1 = mp.ExpressionCost(e=e)
+        cost1_binding1 = mp.Binding[mp.ExpressionCost](cost1, cost1.vars())
+        cost1_binding2 = mp.Binding[mp.ExpressionCost](cost1, cost1.vars())
+
+        cost2 = mp.ExpressionCost(e=e2)
+        cost2_binding = mp.Binding[mp.ExpressionCost](cost2, cost2.vars())
+
+        self.assertEqual(hash(cost1_binding1), hash(cost1_binding2))
+        self.assertNotEqual(hash(cost1_binding1), hash(cost2_binding))
+
+    def test_is_thread_safe(self):
+        x = sym.Variable("x")
+        y = sym.Variable("y")
+        e1 = np.sin(x) + y
+        cost1 = mp.ExpressionCost(e=e1)
+        self.assertFalse(cost1.is_thread_safe())
 
 
 class TestConstraints(unittest.TestCase):
@@ -231,6 +325,70 @@ class TestConstraints(unittest.TestCase):
         ]
         for cls in cls_list:
             mp.Binding[cls]
+
+    def test_binding_eq(self):
+        x = sym.Variable("x")
+        y = sym.Variable("y")
+        z = sym.Variable("z")
+        e1 = np.sin(x) + y
+        e2 = np.cos(x) + y
+        e3 = np.sin(z) + y
+        constraint1 = mp.ExpressionConstraint(v=np.array([e1]),
+                                              lb=np.array([1.0]),
+                                              ub=np.array([2.0]))
+        constraint1_binding1 = mp.Binding[mp.ExpressionConstraint](
+            constraint1, constraint1.vars()
+        )
+        constraint1_binding2 = mp.Binding[mp.ExpressionConstraint](
+            constraint1, constraint1.vars()
+        )
+
+        constraint2 = mp.ExpressionConstraint(v=np.array([e2]),
+                                              lb=np.array([1.0]),
+                                              ub=np.array([2.0]))
+        constraint2_binding = mp.Binding[mp.ExpressionConstraint](
+            constraint2, constraint2.vars()
+        )
+
+        constraint3 = mp.ExpressionConstraint(v=np.array([e3]),
+                                              lb=np.array([1.0]),
+                                              ub=np.array([2.0]))
+        constraint3_binding = mp.Binding[mp.ExpressionConstraint](
+            constraint3, constraint3.vars()
+        )
+
+        self.assertTrue(constraint1_binding1 == constraint1_binding1)
+        self.assertTrue(constraint1_binding1 == constraint1_binding2)
+        self.assertEqual(constraint1_binding1, constraint1_binding2)
+
+        # The bindings have the same variables but different expressions.
+        self.assertNotEqual(constraint1_binding1, constraint2_binding)
+        # The bindings have the same expression but different variables.
+        self.assertNotEqual(constraint1_binding1, constraint3_binding)
+
+    def test_binding_hash(self):
+        x = sym.Variable("x")
+        y = sym.Variable("y")
+        e = np.log(2*x) + y**2
+        e2 = y
+        constraint1 = mp.ExpressionConstraint(v=np.array([e]),
+                                              lb=np.array([1.0]),
+                                              ub=np.array([2.0]))
+        constraint1_binding1 = mp.Binding[mp.ExpressionConstraint](
+            constraint1, constraint1.vars()
+        )
+        constraint1_binding2 = mp.Binding[mp.ExpressionConstraint](
+            constraint1, constraint1.vars()
+        )
+        constraint2 = mp.ExpressionConstraint(v=np.array([e2]),
+                                              lb=np.array([1.0]),
+                                              ub=np.array([2.0]))
+        constraint2_binding = mp.Binding[mp.ExpressionConstraint](
+            constraint2, constraint2.vars()
+        )
+        self.assertEqual(hash(constraint1_binding1),
+                         hash(constraint1_binding2))
+        self.assertNotEqual(hash(constraint1_binding1), hash(constraint2))
 
 
 # A dummy value function for MinimumValue{Lower,Upper}BoundConstraint.

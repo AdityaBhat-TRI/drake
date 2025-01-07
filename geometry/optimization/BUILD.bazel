@@ -1,3 +1,4 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
@@ -8,7 +9,6 @@ load(
     "//tools/skylark:test_tags.bzl",
     "mosek_test_tags",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -26,6 +26,7 @@ drake_cc_package_library(
         ":cspace_separating_plane",
         ":geodesic_convexity",
         ":graph_of_convex_sets",
+        ":implicit_graph_of_convex_sets",
         ":iris",
         ":iris_internal",
     ],
@@ -35,13 +36,14 @@ drake_cc_library(
     name = "geodesic_convexity",
     srcs = ["geodesic_convexity.cc"],
     hdrs = ["geodesic_convexity.h"],
-    interface_deps = [
+    deps = [
         "//solvers:mathematical_program",
         "//solvers:mathematical_program_result",
     ],
-    deps = [
+    implementation_deps = [
         "//geometry/optimization:convex_set",
         "//solvers:solve",
+        "@common_robotics_utilities_internal//:common_robotics_utilities",
     ],
 )
 
@@ -51,6 +53,7 @@ drake_cc_library(
         "affine_ball.cc",
         "affine_subspace.cc",
         "cartesian_product.cc",
+        "convex_hull.cc",
         "convex_set.cc",
         "hpolyhedron.cc",
         "hyperellipsoid.cc",
@@ -65,6 +68,7 @@ drake_cc_library(
         "affine_ball.h",
         "affine_subspace.h",
         "cartesian_product.h",
+        "convex_hull.h",
         "convex_set.h",
         "hpolyhedron.h",
         "hyperellipsoid.h",
@@ -75,12 +79,13 @@ drake_cc_library(
         "spectrahedron.h",
         "vpolytope.h",
     ],
-    interface_deps = [
+    deps = [
         "//geometry:scene_graph",
+        "//math:matrix_util",
         "//solvers:mathematical_program",
         "//solvers:mathematical_program_result",
     ],
-    deps = [
+    implementation_deps = [
         "//geometry:read_obj",
         "//solvers:aggregate_costs_constraints",
         "//solvers:choose_best_solver",
@@ -91,6 +96,7 @@ drake_cc_library(
         "//solvers:mosek_solver",
         "//solvers:scs_solver",
         "//solvers:solve",
+        "@common_robotics_utilities_internal//:common_robotics_utilities",
         "@qhull_internal//:qhull",
     ],
 )
@@ -172,8 +178,10 @@ drake_cc_library(
 
 drake_cc_library(
     name = "cspace_free_structs",
+    srcs = ["cspace_free_structs.cc"],
     hdrs = ["cspace_free_structs.h"],
     deps = [
+        ":c_iris_collision_geometry",
         "//common:parallelism",
         "//common/symbolic:rational_function",
         "//solvers:mathematical_program",
@@ -188,13 +196,26 @@ drake_cc_library(
     hdrs = ["graph_of_convex_sets.h"],
     deps = [
         ":convex_set",
+        "//common:parallelism",
         "//common/symbolic:expression",
         "//solvers:choose_best_solver",
         "//solvers:create_cost",
         "//solvers:get_program_type",
         "//solvers:mathematical_program_result",
-        "//solvers:mosek_solver",
         "//solvers:solver_interface",
+    ],
+    implementation_deps = [
+        "//solvers:mosek_solver",
+        "//solvers:solve",
+    ],
+)
+
+drake_cc_library(
+    name = "implicit_graph_of_convex_sets",
+    srcs = ["implicit_graph_of_convex_sets.cc"],
+    hdrs = ["implicit_graph_of_convex_sets.h"],
+    deps = [
+        ":graph_of_convex_sets",
     ],
 )
 
@@ -232,6 +253,7 @@ drake_cc_library(
     testonly = 1,
     srcs = ["test_utilities.cc"],
     hdrs = ["test_utilities.h"],
+    visibility = ["//visibility:private"],
     deps = [
         ":convex_set",
         "//geometry:scene_graph",
@@ -274,9 +296,20 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "convex_hull_test",
+    deps = [
+        ":convex_set",
+        ":test_utilities",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//common/test_utilities:expect_throws_message",
+    ],
+)
+
+drake_cc_googletest(
     name = "convex_set_test",
     deps = [
         ":convex_set",
+        "//common/test_utilities:eigen_matrix_compare",
         "//common/test_utilities:expect_throws_message",
     ],
 )
@@ -412,6 +445,7 @@ drake_cc_library(
 
 drake_cc_googletest(
     name = "c_iris_collision_geometry_test",
+    tags = ["no_kcov"],
     deps = [
         ":c_iris_collision_geometry",
         ":c_iris_test_utilities",
@@ -429,6 +463,7 @@ drake_cc_googletest(
 
 drake_cc_googletest(
     name = "geodesic_convexity_test",
+    num_threads = 2,
     deps = [
         ":convex_set",
         ":geodesic_convexity",
@@ -440,6 +475,7 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "graph_of_convex_sets_test",
     timeout = "moderate",
+    num_threads = 2,
     shard_count = 8,
     deps = [
         ":graph_of_convex_sets",
@@ -455,6 +491,18 @@ drake_cc_googletest(
         "//solvers:ipopt_solver",
         "//solvers:linear_system_solver",
         "//solvers:mosek_solver",
+        "//solvers:osqp_solver",
+        "//solvers:scs_solver",
+    ],
+)
+
+drake_cc_googletest(
+    name = "implicit_graph_of_convex_sets_test",
+    deps = [
+        ":implicit_graph_of_convex_sets",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//common/test_utilities:expect_no_throw",
+        "//common/test_utilities:expect_throws_message",
     ],
 )
 
@@ -496,6 +544,7 @@ drake_cc_googletest(
 
 drake_cc_googletest(
     name = "intersection_test",
+    num_threads = 2,
     deps = [
         ":convex_set",
         ":test_utilities",
@@ -505,7 +554,19 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "iris_internal_test",
+    deps = [
+        ":iris_internal",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//multibody/parsing:parser",
+        "//solvers:ipopt_solver",
+        "//systems/framework:diagram_builder",
+    ],
+)
+
+drake_cc_googletest(
     name = "iris_test",
+    tags = ["no_kcov"],
     deps = [
         ":iris",
         "//common/test_utilities:eigen_matrix_compare",
@@ -527,6 +588,7 @@ drake_cc_googletest(
     ],
     deps = [
         ":iris",
+        "//common/test_utilities:eigen_matrix_compare",
         "//common/test_utilities:expect_throws_message",
         "//common/test_utilities:maybe_pause_for_user",
         "//geometry:meshcat",
@@ -543,6 +605,7 @@ drake_cc_googletest(
         ":convex_set",
         ":test_utilities",
         "//common/test_utilities:eigen_matrix_compare",
+        "//common/test_utilities:expect_throws_message",
     ],
 )
 
@@ -552,11 +615,13 @@ drake_cc_googletest(
         ":convex_set",
         ":test_utilities",
         "//common/test_utilities:eigen_matrix_compare",
+        "//common/test_utilities:expect_throws_message",
     ],
 )
 
 drake_cc_googletest(
     name = "spectrahedron_test",
+    num_threads = 2,
     deps = [
         ":convex_set",
         "//common/test_utilities:eigen_matrix_compare",

@@ -16,7 +16,7 @@ import sys
 import tempfile
 import traceback
 
-from bazel_tools.tools.python.runfiles import runfiles
+from python import runfiles
 
 # This global variable can be toggled by our main() function.
 _verbose = False
@@ -49,6 +49,8 @@ def symlink_input(filegroup_resource_path, temp_dir, strip_prefix=None,
     with open(manifest.Rlocation(filegroup_resource_path)) as f:
         input_filenames = f.read().splitlines()
     for name in input_filenames:
+        if name.startswith("_main/"):
+            name = f"drake/{name[6:]}"
         orig_name = manifest.Rlocation(name)
         assert os.path.exists(orig_name), name
         dest_name = name

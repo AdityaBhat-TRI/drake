@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <unordered_set>
 
+#include <fmt/ranges.h>
+
 #include "drake/common/drake_assert.h"
 #include "drake/common/string_unordered_set.h"
 #include "drake/common/text_logging.h"
@@ -102,25 +104,6 @@ Diagram<T>::DoAllocateCompositeEventCollection() const {
 }
 
 template <typename T>
-void Diagram<T>::SetDefaultState(const Context<T>& context,
-                                 State<T>* state) const {
-  this->ValidateContext(context);
-  auto diagram_context = dynamic_cast<const DiagramContext<T>*>(&context);
-  DRAKE_DEMAND(diagram_context != nullptr);
-
-  this->ValidateCreatedForThisSystem(state);
-  auto diagram_state = dynamic_cast<DiagramState<T>*>(state);
-  DRAKE_DEMAND(diagram_state != nullptr);
-
-  // Set default state of each constituent system.
-  for (SubsystemIndex i(0); i < num_subsystems(); ++i) {
-    auto& subcontext = diagram_context->GetSubsystemContext(i);
-    auto& substate = diagram_state->get_mutable_substate(i);
-    registered_systems_[i]->SetDefaultState(subcontext, &substate);
-  }
-}
-
-template <typename T>
 void Diagram<T>::SetDefaultParameters(const Context<T>& context,
                                       Parameters<T>* params) const {
   this->ValidateContext(context);
@@ -171,6 +154,25 @@ void Diagram<T>::SetDefaultParameters(const Context<T>& context,
     subparameters.set_system_id(subcontext.get_system_id());
 
     registered_systems_[i]->SetDefaultParameters(subcontext, &subparameters);
+  }
+}
+
+template <typename T>
+void Diagram<T>::SetDefaultState(const Context<T>& context,
+                                 State<T>* state) const {
+  this->ValidateContext(context);
+  auto diagram_context = dynamic_cast<const DiagramContext<T>*>(&context);
+  DRAKE_DEMAND(diagram_context != nullptr);
+
+  this->ValidateCreatedForThisSystem(state);
+  auto diagram_state = dynamic_cast<DiagramState<T>*>(state);
+  DRAKE_DEMAND(diagram_state != nullptr);
+
+  // Set default state of each constituent system.
+  for (SubsystemIndex i(0); i < num_subsystems(); ++i) {
+    auto& subcontext = diagram_context->GetSubsystemContext(i);
+    auto& substate = diagram_state->get_mutable_substate(i);
+    registered_systems_[i]->SetDefaultState(subcontext, &substate);
   }
 }
 
@@ -1429,6 +1431,10 @@ Diagram<T>::ConvertScalarType() const {
   // Move the new systems into the blueprint.
   blueprint->systems = std::move(new_systems);
 
+  // Do nothing about life_support. Since scalar conversion is effectively a
+  // deep copy, the lifetime extensions provided by life_support are not needed
+  // here.
+
   return blueprint;
 }
 
@@ -1549,6 +1555,7 @@ void Diagram<T>::Initialize(std::unique_ptr<Blueprint> blueprint) {
   connection_map_ = std::move(blueprint->connection_map);
   output_port_ids_ = std::move(blueprint->output_port_ids);
   registered_systems_ = std::move(blueprint->systems);
+  life_support_ = std::move(blueprint->life_support);
 
   // This cache entry just maintains temporary storage. It is only ever used
   // by DoCalcNextUpdateTime(). Since this declaration of the cache entry
@@ -1754,4 +1761,4 @@ int Diagram<T>::num_subsystems() const {
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-  class ::drake::systems::Diagram)
+  class ::drake::systems::Diagram);

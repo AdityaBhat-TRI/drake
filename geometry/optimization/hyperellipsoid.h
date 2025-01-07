@@ -30,9 +30,9 @@ A hyperellipsoid can never be empty -- it always contains its center. This
 includes the zero-dimensional case.
 
 @ingroup geometry_optimization */
-class Hyperellipsoid final : public ConvexSet, private ShapeReifier {
+class Hyperellipsoid final : public ConvexSet {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Hyperellipsoid)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Hyperellipsoid);
 
   /** Constructs a default (zero-dimensional, nonempty) set. */
   Hyperellipsoid();
@@ -73,6 +73,15 @@ class Hyperellipsoid final : public ConvexSet, private ShapeReifier {
   @throws std::exception if ambient_dimension() == 0 */
   std::pair<double, Eigen::VectorXd> MinimumUniformScalingToTouch(
       const ConvexSet& other) const;
+
+  /** Results a new Hyperellipsoid that is a scaled version of `this` about the
+  center. Any point on the boundary of the ellipsoid, x, is now translated to a
+  new point, x*, such that ||x* - center|| = ||x - center|| *
+  pow(scale, 1.0/ambient_dimension()). The volume of the resulting shape is
+  scaled up by 'scale'.
+  @pre `scale` > 0.
+  */
+  [[nodiscard]] Hyperellipsoid Scale(double scale) const;
 
   /** Constructs a Ellipsoid shape description of this set.  Note that the
   choice of ellipsoid is not unique.  This method chooses to order the Ellipsoid
@@ -136,6 +145,12 @@ class Hyperellipsoid final : public ConvexSet, private ShapeReifier {
   /** Computes the volume for the hyperellipsoid set.*/
   double Volume() const { return CalcVolume(); }
 
+  /** A Hyperellipsoid is bounded if the kernel of A is rank-zero.
+  @param parallelism Ignored -- no parallelization is used.
+  @note See @ref ConvexSet::IsBounded "parent class's documentation" for more
+  details. */
+  using ConvexSet::IsBounded;
+
  private:
   std::unique_ptr<ConvexSet> DoClone() const final;
 
@@ -149,8 +164,8 @@ class Hyperellipsoid final : public ConvexSet, private ShapeReifier {
   /** Returns the center, which is always feasible. */
   std::optional<Eigen::VectorXd> DoMaybeGetFeasiblePoint() const final;
 
-  bool DoPointInSet(const Eigen::Ref<const Eigen::VectorXd>& x,
-                    double tol) const final;
+  std::optional<bool> DoPointInSetShortcut(
+      const Eigen::Ref<const Eigen::VectorXd>& x, double tol) const final;
 
   std::pair<VectorX<symbolic::Variable>,
             std::vector<solvers::Binding<solvers::Constraint>>>
@@ -177,14 +192,12 @@ class Hyperellipsoid final : public ConvexSet, private ShapeReifier {
   std::pair<std::unique_ptr<Shape>, math::RigidTransformd> DoToShapeWithPose()
       const final;
 
+  std::unique_ptr<ConvexSet> DoAffineHullShortcut(
+      std::optional<double> tol) const final;
+
   double DoCalcVolume() const final;
 
   void CheckInvariants() const;
-
-  // Implement support shapes for the ShapeReifier interface.
-  using ShapeReifier::ImplementGeometry;
-  void ImplementGeometry(const Ellipsoid& ellipsoid, void* data) final;
-  void ImplementGeometry(const Sphere& sphere, void* data) final;
 
   Eigen::MatrixXd A_{};
   Eigen::VectorXd center_{};

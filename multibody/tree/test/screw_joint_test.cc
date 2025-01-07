@@ -32,7 +32,7 @@ class ScrewJointTest : public ::testing::Test {
   // screw joint.
   void SetUp() override {
     auto model = std::make_unique<internal::MultibodyTree<double>>();
-    body_ = &model->AddRigidBody("Body", SpatialInertia<double>{});
+    body_ = &model->AddRigidBody("Body", SpatialInertia<double>::NaN());
 
     // Add a screw joint between the world and body1:
     joint_ = &model->AddJoint<ScrewJoint>("Joint", model->world_body(),
@@ -52,7 +52,7 @@ class ScrewJointTest : public ::testing::Test {
         Vector1d::Constant(kAccelerationUpperLimit));
 
     system_ = std::make_unique<internal::MultibodyTreeSystem<double>>(
-        std::move(model), true/* is_discrete */);
+        std::move(model), true /* is_discrete */);
     context_ = system_->CreateDefaultContext();
   }
 
@@ -109,13 +109,6 @@ TEST_F(ScrewJointTest, GetJointLimits) {
 TEST_F(ScrewJointTest, Damping) {
   EXPECT_EQ(joint_->default_damping(), kDamping);
   EXPECT_EQ(joint_->default_damping_vector(), Vector1d(kDamping));
-
-  // Ensure the deprecated versions are correct until removal.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  EXPECT_EQ(joint_->damping(), kDamping);
-  EXPECT_EQ(joint_->damping_vector(), Vector1d(kDamping));
-#pragma GCC diagnostic pop
 }
 
 // Context-dependent value access.
@@ -205,7 +198,8 @@ TEST_F(ScrewJointTest, AddInDampingForces) {
 
 TEST_F(ScrewJointTest, Clone) {
   auto model_clone = tree().CloneToScalar<AutoDiffXd>();
-  const auto& joint_clone = model_clone->get_variant(*joint_);
+  const auto& joint_clone = dynamic_cast<const ScrewJoint<AutoDiffXd>&>(
+      model_clone->get_variant(*joint_));
 
   EXPECT_EQ(joint_clone.name(), joint_->name());
   EXPECT_EQ(joint_clone.frame_on_parent().index(),

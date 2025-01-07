@@ -7,21 +7,15 @@ startup --output_base="@BAZEL_OUTPUT_BASE@"
 # Inherit Drake's default options.
 @BAZELRC_IMPORT@
 
-# Verbosity setting, controlled by CMAKE_VERBOSE_MAKEFILE.
-common --announce_rc=@BAZEL_ANNOUNCE_RC@
-
 # Environment variables to be used in repository rules (if any).
 common @BAZEL_REPO_ENV@
+
+# Use the Python interpreter from our cmake/WORKSPACE.bzlmod.in.
+build --extra_toolchains=@python//:all
 
 # Disable the "convenience symlinks" intended for Bazel users; they only add
 # confusion for the CMake use case.
 build --symlink_prefix=/
-
-# Console output setting, controlled by CMAKE_COLOR_MAKEFILE.
-build --color=@BAZEL_COLOR@
-
-# Console output setting, controlled by CMAKE_VERBOSE_MAKEFILE.
-build --subcommands=@BAZEL_SUBCOMMANDS@
 
 # Use the source code and BUILD files from the Drake source tree.
 # The WORKSPACE lives in the build directory, so by has no packages otherwise.
@@ -39,6 +33,9 @@ build:MinSizeRel --compilation_mode=opt --copt=-Os --host_copt=-Os
 build:Release --compilation_mode=opt
 build:RelWithDebInfo --compilation_mode=opt --fission=no --copt=-g --host_copt=-g
 
+# Pass along the compiler version.
+build --@drake//tools/cc_toolchain:compiler_major=@DRAKE_CC_TOOLCHAIN_COMPILER_MAJOR@
+
 # Match CMAKE_BUILD_TYPE as well as the WITH_FOO customizations.
 build @BAZEL_CONFIG@
 
@@ -47,6 +44,11 @@ try-import @PROJECT_SOURCE_DIR@/user.bazelrc
 
 # Use build-specific bazel options (if present).
 try-import @PROJECT_BINARY_DIR@/drake.bazelrc
+
+# Provide the contents of VERSION.TXT in Bazel's stable-status.txt file for use
+# by the stamping rules in tools/install/libdrake/BUILD.bazel.
+build --stamp
+build --workspace_status_command="sed 's/^/STABLE_VERSION /' '@PROJECT_BINARY_DIR@/VERSION.TXT'"
 
 # TODO(jwnimmer-tri) Pass along CMAKE_C_FLAGS and CMAKE_CXX_FLAGS also, and
 # specifically make sure the user's -std=c++NN is respected.

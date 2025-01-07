@@ -79,7 +79,7 @@ endif()
 
 # The version passed to find_package(Bazel) should match the
 # minimum_bazel_version value in the call to versions.check() in WORKSPACE.
-set(MINIMUM_BAZEL_VERSION 5.1)
+set(MINIMUM_BAZEL_VERSION 7.4)
 find_package(Bazel ${MINIMUM_BAZEL_VERSION} MODULE)
 if(NOT Bazel_FOUND)
   set(Bazel_EXECUTABLE "${PROJECT_SOURCE_DIR}/third_party/com_github_bazelbuild_bazelisk/bazelisk.py")
@@ -98,10 +98,18 @@ if(C_COMPILER_NAME STREQUAL ccache OR CXX_COMPILER_NAME STREQUAL ccache)
   )
 endif()
 
+# Get the full C++ compiler major version for our cmake/bazel.rc.in.
+string(REGEX MATCH "^([0-9]+)"
+  DRAKE_CC_TOOLCHAIN_COMPILER_MAJOR
+  "${CMAKE_CXX_COMPILER_VERSION}")
+if(NOT DRAKE_CC_TOOLCHAIN_COMPILER_MAJOR)
+  set(DRAKE_CC_TOOLCHAIN_COMPILER_MAJOR "0")
+endif()
+
 # The minimum compiler versions should match those listed in both
 # doc/_pages/from_source.md and tools/workspace/cc/repository.bzl.
 set(MINIMUM_APPLE_CLANG_VERSION 14)
-set(MINIMUM_CLANG_VERSION 14)
+set(MINIMUM_CLANG_VERSION 15)
 set(MINIMUM_GNU_VERSION 11)
 
 if(CMAKE_C_COMPILER_ID STREQUAL AppleClang)
@@ -191,17 +199,17 @@ endif()
 # standard nor CMAKE_CXX_FLAGS to Bazel, but we should.
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 
 # The supported Python major/minor versions should match those listed in
-# doc/_pages/from_source.md.
+# doc/_pages/from_source.md and setup/python/pyproject.toml.
 if(APPLE)
   # The macOS python version should match what's listed in both the
   # tools/workspace/python/repository.bzl and doc/_pages/installation.md.
   set(SUPPORTED_PYTHON_VERSION 3.12)
 else()
   if(UNIX_DISTRIBUTION_CODENAME STREQUAL noble)
-    set(SUPPORTED_PYTHON_VERSION 3.11)
+    set(SUPPORTED_PYTHON_VERSION 3.12)
   else()  # UNIX_DISTRIBUTION_CODENAME := jammy
     set(SUPPORTED_PYTHON_VERSION 3.10)
   endif()
@@ -260,20 +268,6 @@ if(NOT PYTHON_VERSION_MAJOR_MINOR VERSION_EQUAL SUPPORTED_PYTHON_VERSION)
     "You may experience compatibility problems that are outside the scope of "
     "Drake's continuous integration test suites."
   )
-endif()
-
-if(CMAKE_COLOR_MAKEFILE)
-  set(BAZEL_COLOR yes)
-else()
-  set(BAZEL_COLOR no)
-endif()
-
-if(CMAKE_VERBOSE_MAKEFILE)
-  set(BAZEL_SUBCOMMANDS yes)
-  set(BAZEL_ANNOUNCE_RC yes)
-else()
-  set(BAZEL_SUBCOMMANDS no)
-  set(BAZEL_ANNOUNCE_RC no)
 endif()
 
 set(BAZEL_REPO_ENV)
@@ -363,6 +357,9 @@ endfunction()
 
 set(BAZEL_WORKSPACE_EXTRA)
 set(BAZEL_WORKSPACE_EXCLUDES)
+
+# Our cmake/WORKSPACE.bzlmod always provides @python.
+list(APPEND BAZEL_WORKSPACE_EXCLUDES "python")
 
 macro(override_repository NAME)
   set(repo "${CMAKE_CURRENT_BINARY_DIR}/external/workspace/${NAME}")
@@ -520,10 +517,6 @@ endif()
 
 set(BAZEL_INSTALL_ARGS "\${CMAKE_INSTALL_PREFIX}")
 
-if(CMAKE_COLOR_MAKEFILE)
-  list(INSERT BAZEL_INSTALL_ARGS 0 "--color")
-endif()
-
 if(CMAKE_INSTALL_NAME_TOOL)
   list(INSERT BAZEL_INSTALL_ARGS 0
     "--install_name_tool"
@@ -560,38 +553,43 @@ endforeach()
 # however, that the macOS wheel builds also need to know this path, so if it
 # ever changes, tools/wheel/macos/build-wheel.sh will also need to be updated.
 configure_file(cmake/bazel.rc.in drake_build_cwd/.bazelrc @ONLY)
-configure_file(cmake/WORKSPACE.in drake_build_cwd/WORKSPACE.bazel @ONLY)
+configure_file(cmake/WORKSPACE.bzlmod.in drake_build_cwd/WORKSPACE.bzlmod @ONLY)
 file(CREATE_LINK "${PROJECT_SOURCE_DIR}/.bazeliskrc" drake_build_cwd/.bazeliskrc SYMBOLIC)
-
-set(GIT_DIR "${PROJECT_SOURCE_DIR}/.git")
-set(GIT_REVISION HEAD)
+file(CREATE_LINK "${PROJECT_SOURCE_DIR}/MODULE.bazel" drake_build_cwd/MODULE.bazel SYMBOLIC)
+file(CREATE_LINK "${PROJECT_SOURCE_DIR}/WORKSPACE" drake_build_cwd/WORKSPACE SYMBOLIC)
 
 find_package(Git)
 
-if(GIT_FOUND AND EXISTS "${GIT_DIR}")
-  execute_process(COMMAND
-    "${GIT_EXECUTABLE}" "--git-dir=${GIT_DIR}" rev-parse HEAD
-    RESULT_VARIABLE GIT_REV_PARSE_RESULT_VARIABLE
-    OUTPUT_VARIABLE GIT_REV_PARSE_OUTPUT_VARIABLE
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-
-  if(GIT_REV_PARSE_RESULT_VARIABLE EQUAL 0)
-    set(GIT_REVISION "${GIT_REV_PARSE_OUTPUT_VARIABLE}")
-  endif()
-endif()
-
-string(TIMESTAMP BUILD_TIMESTAMP "%Y%m%d%H%M%S")
-
-configure_file(tools/install/libdrake/VERSION.TXT.in VERSION.TXT @ONLY)
+set(GIT_DIR "${PROJECT_SOURCE_DIR}/.git")
 
 execute_process(
   COMMAND "${Bazel_EXECUTABLE}" info --announce_rc
   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/drake_build_cwd"
 )
 
+set(GENERATE_DRAKE_VERSION_ARGS)
+if(DEFINED DRAKE_VERSION_OVERRIDE)
+  list(APPEND GENERATE_DRAKE_VERSION_ARGS
+    "-DDRAKE_VERSION_OVERRIDE=${DRAKE_VERSION_OVERRIDE}")
+endif()
+if(DEFINED DRAKE_GIT_SHA_OVERRIDE)
+  list(APPEND GENERATE_DRAKE_VERSION_ARGS
+    "-DDRAKE_GIT_SHA_OVERRIDE=${DRAKE_GIT_SHA_OVERRIDE}")
+endif()
+
+add_custom_target(drake_version ALL
+  COMMAND "${CMAKE_COMMAND}"
+    ${GENERATE_DRAKE_VERSION_ARGS}
+    "-DGIT_DIR=${GIT_DIR}"
+    "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+    "-DINPUT_FILE=${PROJECT_SOURCE_DIR}/tools/install/libdrake/VERSION.TXT.in"
+    "-DOUTPUT_FILE=${PROJECT_BINARY_DIR}/VERSION.TXT"
+    -P "${PROJECT_SOURCE_DIR}/tools/install/libdrake/generate_version.cmake"
+)
+
 add_custom_target(drake_cxx_python ALL
   COMMAND "${Bazel_EXECUTABLE}" build ${BAZEL_INSTALL_TARGET}
+  DEPENDS "${PROJECT_BINARY_DIR}/VERSION.TXT"
   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/drake_build_cwd"
   USES_TERMINAL
 )

@@ -1,7 +1,7 @@
 #include "drake/manipulation/schunk_wsg/schunk_wsg_trajectory_generator.h"
 
 #include "drake/common/trajectories/piecewise_polynomial.h"
-#include "drake/manipulation/schunk_wsg/gen/schunk_wsg_trajectory_generator_state_vector.h"
+#include "drake/manipulation/schunk_wsg/schunk_wsg_trajectory_generator_state_vector.h"
 
 namespace drake {
 namespace manipulation {
@@ -88,8 +88,8 @@ EventStatus SchunkWsgTrajectoryGenerator::CalcDiscreteUpdate(
   const double max_force = get_force_limit_input_port().Eval(context)[0];
   new_traj_state->set_max_force(max_force);
 
-  if (std::abs(last_traj_state->last_target_position() - target_position) >
-      kTargetEpsilon) {
+  if (!trajectory_ || std::abs(last_traj_state->last_target_position() -
+                               target_position) > kTargetEpsilon) {
     UpdateTrajectory(cur_position, target_position);
     new_traj_state->set_last_target_position(target_position);
     new_traj_state->set_trajectory_start_time(context.get_time());

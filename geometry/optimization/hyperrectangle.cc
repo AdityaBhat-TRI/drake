@@ -13,6 +13,7 @@
 #include <Eigen/Eigenvalues>
 #include <fmt/format.h>
 
+#include "drake/geometry/optimization/affine_subspace.h"
 #include "drake/geometry/optimization/convex_set.h"
 #include "drake/solvers/solve.h"
 
@@ -39,6 +40,8 @@ Hyperrectangle::Hyperrectangle(const Eigen::Ref<const Eigen::VectorXd>& lb,
     : ConvexSet(lb.size(), true), lb_(lb), ub_(ub) {
   CheckInvariants();
 }
+
+Hyperrectangle::~Hyperrectangle() = default;
 
 std::optional<Hyperrectangle> Hyperrectangle::MaybeCalcAxisAlignedBoundingBox(
     const ConvexSet& set) {
@@ -95,8 +98,12 @@ std::optional<Eigen::VectorXd> Hyperrectangle::DoMaybeGetFeasiblePoint() const {
   return (ub_ + lb_) / 2.0;
 }
 
-bool Hyperrectangle::DoPointInSet(const Eigen::Ref<const Eigen::VectorXd>& x,
-                                  double tol) const {
+std::optional<bool> Hyperrectangle::DoIsBoundedShortcut() const {
+  return true;
+}
+
+std::optional<bool> Hyperrectangle::DoPointInSetShortcut(
+    const Eigen::Ref<const Eigen::VectorXd>& x, double tol) const {
   return (x.array() >= lb_.array() - tol).all() &&
          (x.array() <= ub_.array() + tol).all();
 }
@@ -206,6 +213,24 @@ Hyperrectangle::DoToShapeWithPose() const {
   }
   return std::make_pair(std::make_unique<geometry::Box>(ub_ - lb_),
                         math::RigidTransformd(Center()));
+}
+
+std::unique_ptr<ConvexSet> Hyperrectangle::DoAffineHullShortcut(
+    std::optional<double> tol) const {
+  MatrixXd basis = MatrixXd::Zero(ambient_dimension(), ambient_dimension());
+  int current_dimension = 0;
+  int num_basis_vectors = 0;
+  for (int i = 0; i < ambient_dimension(); ++i) {
+    // If the numerical tolerance was not specified, we use a reasonable
+    // default.
+    if (ub_[i] - lb_[i] > (tol ? tol.value() : 1e-12)) {
+      basis(current_dimension, num_basis_vectors) = 1;
+      ++num_basis_vectors;
+    }
+    ++current_dimension;
+  }
+  return std::make_unique<AffineSubspace>(basis.leftCols(num_basis_vectors),
+                                          lb_);
 }
 
 double Hyperrectangle::DoCalcVolume() const {

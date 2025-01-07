@@ -1,3 +1,6 @@
+load("//tools/skylark:cc.bzl", "CcInfo")
+load("//tools/skylark:sh.bzl", "sh_test")
+
 # This file contains a linter rule that ensures that only our allowed set of
 # third-party dependencies are used as "interface deps". In almost all cases,
 # we should be using "implementation deps" when using third-party libraries.
@@ -58,11 +61,11 @@ def _cc_check_allowed_headers_impl(ctx):
         error_messages = [
             "Dependency pollution has leaked into Drake's public headers:",
         ] + [
-            " {} is not allowed in interface_deps".format(item)
+            " {} is not allowed in deps".format(item)
             for item in depset(failures).to_list()
         ] + [
             "To resolve this problem, alter your drake_cc_library to either:",
-            " split up 'interface_deps = [...]' vs 'deps = [...]', or",
+            " split up 'deps = [...]' vs 'implementation_deps = [...]', or",
             " use 'internal = True'.",
             "Check the drake_cc_library documentation for details, or",
             " ask for help on drakedevelopers#build slack.",
@@ -97,7 +100,7 @@ def cc_check_allowed_headers(name, deps = []):
         tags = ["manual"],
         deps = deps,
     )
-    native.sh_test(
+    sh_test(
         name = name,
         tags = ["lint"],
         srcs = [":" + sh_src],

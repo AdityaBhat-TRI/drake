@@ -34,7 +34,7 @@ namespace internal {
 template <typename T>
 class VelocityKinematicsCache {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(VelocityKinematicsCache)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(VelocityKinematicsCache);
 
   // Constructs a velocity kinematics cache entry for the given
   // MultibodyTreeTopology.
@@ -55,8 +55,7 @@ class VelocityKinematicsCache {
   // Initializes `this` %VelocityKinematicsCache as if all generalized
   // velocities of the corresponding MultibodyTree model were zero.
   void InitializeToZero() {
-    for (MobodIndex mobod_index(0); mobod_index < num_mobods_;
-         ++mobod_index) {
+    for (MobodIndex mobod_index(0); mobod_index < num_mobods_; ++mobod_index) {
       V_WB_pool_[mobod_index].SetZero();
       V_FM_pool_[mobod_index].SetZero();
       V_PB_W_pool_[mobod_index].SetZero();
@@ -126,8 +125,7 @@ class VelocityKinematicsCache {
   // Initializes all pools to have NaN values to ease bug detection when entries
   // are accidentally left uninitialized.
   void InitializeToNaN() {
-    for (MobodIndex mobod_index(0); mobod_index < num_mobods_;
-         ++mobod_index) {
+    for (MobodIndex mobod_index(0); mobod_index < num_mobods_; ++mobod_index) {
       V_WB_pool_[mobod_index].SetNaN();
       V_FM_pool_[mobod_index].SetNaN();
       V_PB_W_pool_[mobod_index].SetNaN();
@@ -146,4 +144,4 @@ class VelocityKinematicsCache {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::internal::VelocityKinematicsCache)
+    class ::drake::multibody::internal::VelocityKinematicsCache);

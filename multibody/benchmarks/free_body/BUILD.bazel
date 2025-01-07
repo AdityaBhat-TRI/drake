@@ -1,22 +1,19 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(default_visibility = ["//visibility:private"])
 
 filegroup(
     name = "models",
     testonly = 1,
-    srcs = glob([
-        "**/*.obj",
-        "**/*.sdf",
-        "**/*.urdf",
-        "**/*.xml",
-    ]),
+    srcs = [
+        "uniform_solid_cylinder.urdf",
+    ],
     visibility = ["//visibility:public"],
 )
 

@@ -122,9 +122,7 @@ PiecewiseQuaternionSlerp<T>::PiecewiseQuaternionSlerp(
 }
 
 template <typename T>
-std::unique_ptr<Trajectory<T>> PiecewiseQuaternionSlerp<T>::Clone() const {
-  return std::make_unique<PiecewiseQuaternionSlerp>(*this);
-}
+PiecewiseQuaternionSlerp<T>::~PiecewiseQuaternionSlerp() = default;
 
 template <typename T>
 T PiecewiseQuaternionSlerp<T>::ComputeInterpTime(int segment_index,
@@ -189,6 +187,11 @@ void PiecewiseQuaternionSlerp<T>::Append(const T& time,
 }
 
 template <typename T>
+std::unique_ptr<Trajectory<T>> PiecewiseQuaternionSlerp<T>::DoClone() const {
+  return std::make_unique<PiecewiseQuaternionSlerp>(*this);
+}
+
+template <typename T>
 bool PiecewiseQuaternionSlerp<T>::do_has_derivative() const {
   return true;
 }
@@ -197,7 +200,7 @@ template <typename T>
 MatrixX<T> PiecewiseQuaternionSlerp<T>::DoEvalDerivative(
     const T& t, int derivative_order) const {
   if (derivative_order == 0) {
-    return value(t);
+    return this->value(t);
   } else if (derivative_order == 1) {
     return angular_velocity(t);
   }
@@ -225,4 +228,4 @@ std::unique_ptr<Trajectory<T>> PiecewiseQuaternionSlerp<T>::DoMakeDerivative(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::PiecewiseQuaternionSlerp)
+    class drake::trajectories::PiecewiseQuaternionSlerp);

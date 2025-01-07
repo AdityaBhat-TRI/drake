@@ -45,7 +45,7 @@ void DiagramBuilder<T>::RemoveSystem(const System<T>& system) {
   const size_t system_index = std::distance(
       registered_systems_.begin(),
       std::find_if(registered_systems_.begin(), registered_systems_.end(),
-                   [&system](const std::unique_ptr<System<T>>& item) {
+                   [&system](const std::shared_ptr<System<T>>& item) {
                      return item.get() == &system;
                    }));
   DRAKE_DEMAND(system_index < registered_systems_.size());
@@ -444,6 +444,25 @@ void DiagramBuilder<T>::ThrowIfAlreadyBuilt() const {
 }
 
 template <typename T>
+void DiagramBuilder<T>::AddSystemImpl(std::shared_ptr<System<T>>&& system) {
+  DRAKE_THROW_UNLESS(system != nullptr);
+  ThrowIfAlreadyBuilt();
+  if (system->get_name().empty()) {
+    system->set_name(system->GetMemoryObjectName());
+  }
+  systems_.insert(system.get());
+  registered_systems_.push_back(std::move(system));
+}
+
+template <typename T>
+void DiagramBuilder<T>::AddNamedSystemImpl(
+    const std::string& name, std::shared_ptr<System<T>>&& system) {
+  DRAKE_THROW_UNLESS(system != nullptr);
+  system->set_name(name);
+  this->AddSystemImpl(std::move(system));
+}
+
+template <typename T>
 void DiagramBuilder<T>::ThrowIfInputAlreadyWired(
     const InputPortLocator& id) const {
   if (connection_map_.find(id) != connection_map_.end() ||
@@ -681,6 +700,7 @@ std::unique_ptr<typename Diagram<T>::Blueprint> DiagramBuilder<T>::Compile() {
   blueprint->output_port_names = output_port_names_;
   blueprint->connection_map = connection_map_;
   blueprint->systems = std::move(registered_systems_);
+  blueprint->life_support = std::move(life_support_);
 
   already_built_ = true;
 
@@ -691,4 +711,4 @@ std::unique_ptr<typename Diagram<T>::Blueprint> DiagramBuilder<T>::Compile() {
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::DiagramBuilder)
+    class ::drake::systems::DiagramBuilder);

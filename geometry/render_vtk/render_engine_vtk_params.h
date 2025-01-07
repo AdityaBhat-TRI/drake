@@ -7,6 +7,7 @@
 
 #include "drake/common/eigen_types.h"
 #include "drake/common/name_value.h"
+#include "drake/common/string_map.h"
 #include "drake/geometry/render/light_parameter.h"
 #include "drake/geometry/render/render_label.h"
 
@@ -71,10 +72,28 @@ struct EnvironmentMap {
   std::variant<NullTexture, EquirectangularMap> texture;
 };
 
+/** Specifies how to deal with glTF "extensions" (non-standard capabilities).
+https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#specifying-extensions
+*/
+struct GltfExtension {
+  /** Passes this object to an Archive.
+   Refer to @ref yaml_serialization "YAML Serialization" for background. */
+  template <typename Archive>
+  void Serialize(Archive* a) {
+    a->Visit(DRAKE_NVP(warn_unimplemented));
+  }
+
+  /** Whether to log a warning when this extension is used (i.e., is listed in
+   `extensionsUsed`) but isn't implemented by the render engine. By default,
+   all unimplemented extensions will log a warning, but users can configure
+   specific extensions to be quiet. */
+  bool warn_unimplemented{true};
+};
+
 /** Construction parameters for the RenderEngineVtk.  */
 struct RenderEngineVtkParams {
   /** Passes this object to an Archive.
-  Refer to @ref yaml_serialization "YAML Serialization" for background. */
+   Refer to @ref yaml_serialization "YAML Serialization" for background. */
   template <typename Archive>
   void Serialize(Archive* a) {
     a->Visit(DRAKE_NVP(default_diffuse));
@@ -84,6 +103,9 @@ struct RenderEngineVtkParams {
     a->Visit(DRAKE_NVP(exposure));
     a->Visit(DRAKE_NVP(cast_shadows));
     a->Visit(DRAKE_NVP(shadow_map_size));
+    a->Visit(DRAKE_NVP(force_to_pbr));
+    a->Visit(DRAKE_NVP(gltf_extensions));
+    a->Visit(DRAKE_NVP(backend));
   }
 
   /** The (optional) rgba color to apply to the (phong, diffuse) property when
@@ -157,6 +179,11 @@ struct RenderEngineVtkParams {
    Several important notes when designing your lighting:
 
        - Point lights do not cast shadows.
+       - Spot lights will not cast shadows if the spot light angle is 90 degrees
+         or more. At 90 degrees, the spot light is now a half-point light.
+         Even though 89.9 degrees _would_ enable shadows, it is still an
+         impractical value. To actually see shadows, the `shadow_map_size` value
+         would have to be absurdly large to support such a wide extent.
        - Directional lights will create a shadow map that spans the whole scene.
          If your scene includes a geometry that is significantly larger than
          the locale you're rendering, this will significantly reduce the
@@ -185,7 +212,62 @@ struct RenderEngineVtkParams {
    See the note on `cast_shadows` for the warning on directional lights and
    shadow maps. */
   int shadow_map_size{256};
+
+  /** RenderEngineVtk can use one of two illumination models: Phong or
+   Physically based rendering (PBR). It defaults to Phong. However, it
+   automatically switches to PBR if:
+
+       - an environment map is added, or
+       - a glTF mesh is added.
+
+   If `force_to_pbr` is set to true, it switches the engine to use PBR
+   regardless of the scene's contents.
+
+   Be aware, switching to PBR will lead to a qualitative change in rendered
+   images even if literally nothing else changes. */
+  bool force_to_pbr{false};
+
+  /** Map from the name of a glTF extension (e.g., "KHR_materials_sheen") to
+   render engine settings related to that extension. */
+  string_map<GltfExtension> gltf_extensions{
+      // The basisu extension is commonplace in the Drake ecosystem, because it
+      // vastly speeds up Meshcat visualizer loading. We suppress VTK warnings
+      // about it by default, to avoid too much warning spam.
+      {"KHR_texture_basisu", {.warn_unimplemented = false}},
+  };
+
+  /** Controls which graphics library will be used to perform the rendering.
+
+  Permissible values are the empty string (default), "GLX", "EGL", and "Cocoa".
+  Any other value will throw an error.
+
+  By default (i.e., when set to the empty string) the render engine will choose
+  which library to use. At the moment the default is "Cocoa" on macOS and "EGL"
+  on Linux.
+
+  If the option is set to one of the permissible values but the related graphics
+  library has not been compiled into current build (e.g., "GLX" on macOS), then
+  the default choice (empty string) will be used instead, with a warning. */
+  std::string backend;
 };
+
+namespace render_vtk {
+namespace internal {
+
+/* A parsed enum form of the RenderEngineVtkParams.backend string. */
+enum class RenderEngineVtkBackend {
+  kCocoa,
+  kEgl,
+  kGlx,
+};
+
+/* Parses the parameters.backend string to an enum and warns or throws per the
+validation logic documented on the `backend` field. */
+RenderEngineVtkBackend ParseRenderEngineVtkBackend(
+    const RenderEngineVtkParams& parameters);
+
+}  // namespace internal
+}  // namespace render_vtk
 
 }  // namespace geometry
 }  // namespace drake

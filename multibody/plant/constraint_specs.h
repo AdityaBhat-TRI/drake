@@ -6,6 +6,7 @@
 /// are later on used by our discrete solvers to build a model.
 
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include "drake/math/rigid_transform.h"
@@ -36,8 +37,8 @@ struct CouplerConstraintSpec {
 
 // Struct to store the specification for a distance constraint. A distance
 // constraint is modeled as a holonomic constraint. Distance constraints can
-// be "soft" which imposes the the condition:
-//   (d(q)-d₀) + c/k⋅ḋ(q) + 1/k⋅f = 0
+// be "soft", and are implemented as a spring force, f:
+//   f = -k⋅(d(q) - d₀) - c⋅ḋ(q),
 // where d₀ is a fixed length, k a stiffness parameter in N/m and c a damping
 // parameter in N⋅s/m. We use d(q) to denote the Euclidean distance between two
 // points P and Q, rigidly affixed to bodies A and B respectively, as a function
@@ -89,10 +90,15 @@ struct BallConstraintSpec {
   //   body_A != body_B.
   bool IsValid() const { return body_A != body_B; }
 
-  BodyIndex body_A;          // Index of body A.
-  Vector3<double> p_AP;      // Position of point P in body frame A.
-  BodyIndex body_B;          // Index of body B.
-  Vector3<double> p_BQ;      // Position of point Q in body frame B.
+  BodyIndex body_A;      // Index of body A.
+  Vector3<double> p_AP;  // Position of point P in body frame A.
+  BodyIndex body_B;      // Index of body B.
+
+  // Position of point Q in body frame B. Pre-finalize this may be
+  // std::nullopt; if so, then during Finalize() it will be set so that the
+  // constraint is satisfied in the default context.
+  std::optional<Vector3<double>> p_BQ;
+
   MultibodyConstraintId id;  // Id of this constraint in the plant.
 };
 
@@ -133,6 +139,7 @@ struct WeldConstraintSpec {
 // @pre each entry in `vertices` refers to a valid vertex index in deformable
 // body A.
 struct DeformableRigidFixedConstraintSpec {
+  bool operator==(const DeformableRigidFixedConstraintSpec&) const = default;
   DeformableBodyId body_A;    // Index of the deformable body A.
   BodyIndex body_B;           // Index of the rigid body B.
   std::vector<int> vertices;  // Indices of the Pᵢ in the deformable body A.

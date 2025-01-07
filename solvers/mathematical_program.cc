@@ -22,6 +22,7 @@
 #include "drake/common/symbolic/decompose.h"
 #include "drake/common/symbolic/latex.h"
 #include "drake/common/symbolic/monomial_util.h"
+#include "drake/common/text_logging.h"
 #include "drake/math/matrix_util.h"
 #include "drake/solvers/binding.h"
 #include "drake/solvers/decision_variable.h"
@@ -69,6 +70,24 @@ string MathematicalProgram::to_string() const {
   std::ostringstream os;
   os << *this;
   return os.str();
+}
+
+bool MathematicalProgram::IsThreadSafe() const {
+  const std::vector<Binding<Cost>> costs = GetAllCosts();
+  const std::vector<Binding<Constraint>> constraints = GetAllConstraints();
+  return std::all_of(visualization_callbacks_.begin(),
+                     visualization_callbacks_.end(),
+                     [](const Binding<VisualizationCallback>& c) {
+                       return c.evaluator()->is_thread_safe();
+                     }) &&
+         std::all_of(costs.begin(), costs.end(),
+                     [](const Binding<Cost>& c) {
+                       return c.evaluator()->is_thread_safe();
+                     }) &&
+         std::all_of(constraints.begin(), constraints.end(),
+                     [](const Binding<Constraint>& c) {
+                       return c.evaluator()->is_thread_safe();
+                     });
 }
 
 std::string MathematicalProgram::ToLatex(int precision) {
@@ -536,6 +555,11 @@ Binding<L2NormCost> MathematicalProgram::AddL2NormCost(
   return AddCost(std::make_shared<L2NormCost>(A, b), vars);
 }
 
+Binding<L2NormCost> MathematicalProgram::AddL2NormCost(
+    const symbolic::Expression& e, double psd_tol, double coefficient_tol) {
+  return AddCost(internal::ParseL2NormCost(e, psd_tol, coefficient_tol));
+}
+
 std::tuple<symbolic::Variable, Binding<LinearCost>,
            Binding<LorentzConeConstraint>>
 MathematicalProgram::AddL2NormCostUsingConicConstraint(
@@ -597,7 +621,7 @@ void CreateLogDetermiant(
   psd_mat << X,             *Z,
              Z->transpose(), diag_Z;
   // clang-format on
-  prog->AddPositiveSemidefiniteConstraint(psd_mat);
+  prog->AddLinearMatrixInequalityConstraint(psd_mat);
   // Now introduce the slack variable t.
   *t = prog->NewContinuousVariables(X_rows);
   // Introduce the constraint log(Z(i, i)) >= t(i).
@@ -969,6 +993,13 @@ Binding<LorentzConeConstraint> MathematicalProgram::AddConstraint(
 }
 
 Binding<LorentzConeConstraint> MathematicalProgram::AddLorentzConeConstraint(
+    const symbolic::Formula& f, LorentzConeConstraint::EvalType eval_type,
+    double psd_tol, double coefficient_tol) {
+  return AddConstraint(internal::ParseLorentzConeConstraint(
+      f, eval_type, psd_tol, coefficient_tol));
+}
+
+Binding<LorentzConeConstraint> MathematicalProgram::AddLorentzConeConstraint(
     const Eigen::Ref<const VectorX<Expression>>& v,
     LorentzConeConstraint::EvalType eval_type) {
   return AddConstraint(internal::ParseLorentzConeConstraint(v, eval_type));
@@ -1147,6 +1178,18 @@ MathematicalProgram::AddPositiveSemidefiniteConstraint(
 }
 
 Binding<PositiveSemidefiniteConstraint>
+MathematicalProgram::AddPositiveSemidefiniteConstraint(
+    const Eigen::Ref<const MatrixX<symbolic::Expression>>& e) {
+  DRAKE_THROW_UNLESS(e.rows() == e.cols());
+  DRAKE_ASSERT(CheckStructuralEquality(e, e.transpose().eval()));
+  const MatrixXDecisionVariable M = NewSymmetricContinuousVariables(e.rows());
+  // Adds the linear equality constraint that M = e.
+  AddLinearEqualityConstraint(e - M, Eigen::MatrixXd::Zero(e.rows(), e.rows()),
+                              true);
+  return AddPositiveSemidefiniteConstraint(M);
+}
+
+Binding<PositiveSemidefiniteConstraint>
 MathematicalProgram::AddPrincipalSubmatrixIsPsdConstraint(
     const Eigen::Ref<const MatrixXDecisionVariable>& symmetric_matrix_var,
     const std::set<int>& minor_indices) {
@@ -1156,13 +1199,13 @@ MathematicalProgram::AddPrincipalSubmatrixIsPsdConstraint(
       math::ExtractPrincipalSubmatrix(symmetric_matrix_var, minor_indices));
 }
 
-Binding<PositiveSemidefiniteConstraint>
+Binding<LinearMatrixInequalityConstraint>
 MathematicalProgram::AddPrincipalSubmatrixIsPsdConstraint(
     const Eigen::Ref<const MatrixX<symbolic::Expression>>& e,
     const std::set<int>& minor_indices) {
-  // This function relies on AddPositiveSemidefiniteConstraint to validate the
+  // This function relies on AddLinearMatrixInequalityConstraint to validate the
   // documented symmetry prerequisite.
-  return AddPositiveSemidefiniteConstraint(
+  return AddLinearMatrixInequalityConstraint(
       math::ExtractPrincipalSubmatrix(e, minor_indices));
 }
 
@@ -1181,10 +1224,44 @@ Binding<LinearMatrixInequalityConstraint> MathematicalProgram::AddConstraint(
 
 Binding<LinearMatrixInequalityConstraint>
 MathematicalProgram::AddLinearMatrixInequalityConstraint(
-    const vector<Eigen::Ref<const Eigen::MatrixXd>>& F,
+    vector<Eigen::MatrixXd> F,
     const Eigen::Ref<const VectorXDecisionVariable>& vars) {
-  auto constraint = make_shared<LinearMatrixInequalityConstraint>(F);
+  auto constraint = make_shared<LinearMatrixInequalityConstraint>(std::move(F));
   return AddConstraint(constraint, vars);
+}
+
+Binding<LinearMatrixInequalityConstraint>
+MathematicalProgram::AddLinearMatrixInequalityConstraint(
+    const Eigen::Ref<const MatrixX<symbolic::Expression>>& X) {
+  DRAKE_THROW_UNLESS(X.rows() == X.cols());
+  DRAKE_ASSERT(CheckStructuralEquality(X, X.transpose().eval()));
+  std::vector<symbolic::Variable> vars_vec;
+  std::unordered_map<symbolic::Variable::Id, int> map_var_to_index;
+  for (int j = 0; j < X.cols(); ++j) {
+    for (int i = j; i < X.rows(); ++i) {
+      symbolic::ExtractAndAppendVariablesFromExpression(X(i, j), &vars_vec,
+                                                        &map_var_to_index);
+    }
+  }
+  std::vector<Eigen::MatrixXd> F(vars_vec.size() + 1,
+                                 Eigen::MatrixXd::Zero(X.rows(), X.rows()));
+  Eigen::RowVectorXd coeffs(vars_vec.size());
+  double constant_term{};
+  for (int j = 0; j < X.cols(); ++j) {
+    for (int i = j; i < X.rows(); ++i) {
+      DecomposeAffineExpression(X(i, j), map_var_to_index, &coeffs,
+                                &constant_term);
+      F[0](i, j) = constant_term;
+      F[0](j, i) = F[0](i, j);
+      for (int k = 0; k < ssize(vars_vec); ++k) {
+        F[1 + k](i, j) = coeffs(k);
+        F[1 + k](j, i) = F[1 + k](i, j);
+      }
+    }
+  }
+  return AddLinearMatrixInequalityConstraint(
+      F, Eigen::Map<VectorX<symbolic::Variable>>(vars_vec.data(),
+                                                 vars_vec.size()));
 }
 
 MatrixX<symbolic::Expression>
@@ -1842,6 +1919,82 @@ void MathematicalProgram::SetVariableScaling(const symbolic::Variable& var,
   }
 }
 
+namespace {
+template <typename C>
+[[nodiscard]] bool IsVariableBound(const symbolic::Variable& var,
+                                   const std::vector<Binding<C>>& bindings,
+                                   std::string* binding_description) {
+  for (const auto& binding : bindings) {
+    if (binding.ContainsVariable(var)) {
+      *binding_description = binding.to_string();
+      return true;
+    }
+  }
+  return false;
+}
+
+// Return true if the variable is bound with a cost or constraint (except for a
+// bounding box constraint); false otherwise.
+[[nodiscard]] bool IsVariableBound(const symbolic::Variable& var,
+                                   const MathematicalProgram& prog,
+                                   std::string* binding_description) {
+  if (IsVariableBound(var, prog.GetAllCosts(), binding_description)) {
+    return true;
+  }
+  if (IsVariableBound(var, prog.GetAllConstraints(), binding_description)) {
+    return true;
+  }
+  if (IsVariableBound(var, prog.visualization_callbacks(),
+                      binding_description)) {
+    return true;
+  }
+  return false;
+}
+}  // namespace
+
+int MathematicalProgram::RemoveDecisionVariable(const symbolic::Variable& var) {
+  if (decision_variable_index_.count(var.get_id()) == 0) {
+    throw std::invalid_argument(
+        fmt::format("RemoveDecisionVariable: {} is not a decision variable of "
+                    "this MathematicalProgram.",
+                    var.get_name()));
+  }
+  std::string binding_description;
+  if (IsVariableBound(var, *this, &binding_description)) {
+    throw std::invalid_argument(
+        fmt::format("RemoveDecisionVariable: {} is associated with a {}.",
+                    var.get_name(), binding_description));
+  }
+  const auto var_it = decision_variable_index_.find(var.get_id());
+  const int var_index = var_it->second;
+  // Update decision_variable_index_.
+  decision_variable_index_.erase(var_it);
+  for (auto& [variable_id, variable_index] : decision_variable_index_) {
+    // Decrement the index of the variable after `var`.
+    if (variable_index > var_index) {
+      --variable_index;
+    }
+  }
+  // Remove the variable from decision_variables_.
+  decision_variables_.erase(decision_variables_.begin() + var_index);
+  // Remove from var_scaling_map_.
+  std::unordered_map<int, double> new_var_scaling_map;
+  for (const auto& [variable_index, scale] : var_scaling_map_) {
+    if (variable_index < var_index) {
+      new_var_scaling_map.emplace(variable_index, scale);
+    } else if (variable_index > var_index) {
+      new_var_scaling_map.emplace(variable_index - 1, scale);
+    }
+  }
+  var_scaling_map_ = std::move(new_var_scaling_map);
+  // Update x_initial_guess_;
+  for (int i = var_index; i < x_initial_guess_.rows() - 1; ++i) {
+    x_initial_guess_(i) = x_initial_guess_(i + 1);
+  }
+  x_initial_guess_.conservativeResize(x_initial_guess_.rows() - 1);
+  return var_index;
+}
+
 template <typename C>
 int MathematicalProgram::RemoveCostOrConstraintImpl(
     const Binding<C>& removal, ProgramAttribute affected_capability,
@@ -2073,6 +2226,12 @@ int MathematicalProgram::RemoveConstraint(
                                       &generic_constraints_);
   }
   DRAKE_UNREACHABLE();
+}
+
+int MathematicalProgram::RemoveVisualizationCallback(
+    const Binding<VisualizationCallback>& callback) {
+  return RemoveCostOrConstraintImpl(callback, ProgramAttribute::kCallback,
+                                    &visualization_callbacks_);
 }
 
 void MathematicalProgram::CheckVariableType(VarType var_type) {
