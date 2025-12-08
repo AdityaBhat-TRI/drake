@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>tzkga_models</name>
+  <version>0.0.0</version>
+  <description>
+    TZKGA Models
+  </description>
+  <maintainer email="aditya.bhat@tri.global">Aditya Bhat</maintainer>
+  <author>Aditya Bhat</author>
+  <license>N/A</license>
+</package>

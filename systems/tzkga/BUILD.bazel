@@ -1,0 +1,31 @@
+package(default_visibility = ["//visibility:public"])
+
+load("@rules_python//python:defs.bzl", "py_binary")
+
+# Make these files directly addressable as //specs:<filename>
+exports_files([
+    "package.xml",
+    "tzk_base.dmd.yaml",
+])
+
+# Everything your app needs at runtime
+filegroup(
+    name = "all_models",
+    srcs = [
+        ":package.xml",
+        ":tzk_base.dmd.yaml",
+        "//systems/tzkga/urdf:all_files",  # matches your actual folder name
+    ],
+)
+
+py_binary(
+    name = "tzkga_sim",
+    srcs = ["tzkga_sim.py"],
+    deps = [
+       "//bindings/pydrake",
+    ],
+    data = [
+        ":all_models",
+    ],
+    python_version = "PY3",
+)

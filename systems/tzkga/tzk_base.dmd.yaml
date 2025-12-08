@@ -1,0 +1,40 @@
+directives:
+
+# Add base (floating, actuated wheels).
+- add_model:
+    name: base_chassis
+    file: package://drake/systems/tzkga/urdf/base_chassis.urdf
+    
+- add_model:
+    name: base_steer
+    file: package://drake/systems/tzkga/urdf/base_steer.urdf
+
+- add_weld:
+    parent: base_chassis::chassis_link
+    child: base_steer::left_front_steer_mount
+- add_weld:
+    parent: base_chassis::chassis_link
+    child: base_steer::right_front_steer_mount
+- add_weld:
+    parent: base_chassis::chassis_link
+    child: base_steer::left_rear_steer_mount
+- add_weld:
+    parent: base_chassis::chassis_link
+    child: base_steer::right_rear_steer_mount
+
+- add_model:
+    name: base_drive
+    file: package://drake/systems/tzkga/urdf/base_drive.urdf
+
+- add_weld:
+    parent: base_steer::left_front_steer_link
+    child: base_drive::left_front_drive_mount
+- add_weld:
+    parent: base_steer::right_front_steer_link
+    child: base_drive::right_front_drive_mount
+- add_weld:
+    parent: base_steer::left_rear_steer_link
+    child: base_drive::left_rear_drive_mount
+- add_weld:
+    parent: base_steer::right_rear_steer_link
+    child: base_drive::right_rear_drive_mount
